@@ -9971,12 +9971,12 @@ function getClassSchemaFactory<S extends Top>(
   ): decodeTo<declareConstructor<Self, S["Encoded"], readonly [S]>, S> => {
     if (memo === undefined) {
       const transformation = getClassTransformation(self)
+      const isFrom = Parser.is(from)
       const to = make<declareConstructor<Self, S["Encoded"], readonly [S]>>(
         new AST.Declaration(
           [from.ast],
           () => (input, ast) => {
-            return input instanceof self ||
-                Predicate.hasProperty(input, getClassTypeId(identifier)) ?
+            return input instanceof self || isFrom(input) ?
               Effect.succeed(input) :
               Effect.fail(new Issue.InvalidType(ast, Option_.some(input)))
           },
