@@ -527,6 +527,45 @@ export function toJsonSchemaMultiDocument(
           // anyOf MUST be a non-empty array
           return { not: {} }
         }
+        if (schema.mode === "anyOf" && types.length > 1) {
+          const literalTypes = types.filter((t) => {
+            const current = t as JsonSchema.JsonSchema
+            return typeof current.type === "string" &&
+              Array.isArray(current.enum) &&
+              Object.keys(current).length === 2
+          })
+          if (literalTypes.length === types.length) {
+            const groups: Array<{ type: string; values: Array<unknown> }> = []
+            for (const current of types as Array<JsonSchema.JsonSchema>) {
+              const groupType = current.type as string
+              const last = groups[groups.length - 1]
+              if (!last || last.type !== groupType) {
+                groups.push({
+                  type: groupType,
+                  values: [...(current.enum as Array<unknown>)]
+                })
+                continue
+              }
+              for (const value of current.enum as Array<unknown>) {
+                if (!last.values.some((v) => Object.is(v, value))) {
+                  last.values.push(value)
+                }
+              }
+            }
+            if (groups.length === 1) {
+              return {
+                type: groups[0].type,
+                enum: groups[0].values
+              }
+            }
+            return {
+              anyOf: groups.map((group) => ({
+                type: group.type,
+                enum: group.values
+              }))
+            }
+          }
+        }
         return schema.mode === "anyOf" ? { anyOf: types } : { oneOf: types }
       }
     }
