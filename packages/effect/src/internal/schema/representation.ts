@@ -23,6 +23,7 @@ export function fromASTs(asts: readonly [AST.AST, ...Array<AST.AST>]): SchemaRep
   const references: Record<string, SchemaRepresentation.Representation> = {}
 
   const referenceMap = new Map<AST.AST, string>()
+  const identifierMap = new Map<string, Array<{ reference: string; fingerprint: string }>>()
   const uniqueReferences = new Set<string>()
   const visiting = new Set<AST.AST>()
 
@@ -63,7 +64,20 @@ export function fromASTs(asts: readonly [AST.AST, ...Array<AST.AST>]): SchemaRep
       const reference = gen(identifier)
       referenceMap.set(ast, reference)
       const out = on(ast)
+      const fingerprint = format(out)
+      const known = identifierMap.get(identifier)
+      const existing = known?.find((_) => _.fingerprint === fingerprint)
+      if (existing !== undefined) {
+        referenceMap.set(ast, existing.reference)
+        uniqueReferences.delete(reference)
+        return { _tag: "Reference", $ref: existing.reference }
+      }
       references[reference] = out
+      if (known === undefined) {
+        identifierMap.set(identifier, [{ reference, fingerprint }])
+      } else {
+        known.push({ reference, fingerprint })
+      }
       return { _tag: "Reference", $ref: reference }
     }
 
