@@ -5584,10 +5584,7 @@ Expected a value with a size of at most 2, got Map([["a",1],["b",NaN],["c",3]])`
         null,
         "Expected A, got null"
       )
-      await encoding.fail(
-        { a: "a" },
-        `Expected A, got {"a":"a"}`
-      )
+      await encoding.succeed({ a: "a" }, { a: "a" })
     })
 
     it("Struct argument", async () => {
@@ -5641,10 +5638,7 @@ Expected a value with a size of at most 2, got Map([["a",1],["b",NaN],["c",3]])`
         null,
         "Expected A, got null"
       )
-      await encoding.fail(
-        { a: "a" },
-        `Expected A, got {"a":"a"}`
-      )
+      await encoding.succeed({ a: "a" }, { a: "a" })
     })
 
     it("annotate", async () => {

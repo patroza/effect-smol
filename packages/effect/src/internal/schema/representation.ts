@@ -23,6 +23,7 @@ export function fromASTs(asts: readonly [AST.AST, ...Array<AST.AST>]): SchemaRep
   const references: Record<string, SchemaRepresentation.Representation> = {}
 
   const referenceMap = new Map<AST.AST, string>()
+  const identifierMap = new Map<string, Array<{ reference: string; fingerprint: string }>>()
   const uniqueReferences = new Set<string>()
   const visiting = new Set<AST.AST>()
 
@@ -63,7 +64,20 @@ export function fromASTs(asts: readonly [AST.AST, ...Array<AST.AST>]): SchemaRep
       const reference = gen(identifier)
       referenceMap.set(ast, reference)
       const out = on(ast)
+      const fingerprint = format(out)
+      const known = identifierMap.get(identifier)
+      const existing = known?.find((_) => _.fingerprint === fingerprint)
+      if (existing !== undefined) {
+        referenceMap.set(ast, existing.reference)
+        uniqueReferences.delete(reference)
+        return { _tag: "Reference", $ref: existing.reference }
+      }
       references[reference] = out
+      if (known === undefined) {
+        identifierMap.set(identifier, [{ reference, fingerprint }])
+      } else {
+        known.push({ reference, fingerprint })
+      }
       return { _tag: "Reference", $ref: reference }
     }
 
@@ -526,6 +540,45 @@ export function toJsonSchemaMultiDocument(
         if (types.length === 0) {
           // anyOf MUST be a non-empty array
           return { not: {} }
+        }
+        if (schema.mode === "anyOf" && types.length > 1) {
+          const literalTypes = types.filter((t) => {
+            const current = t as JsonSchema.JsonSchema
+            return typeof current.type === "string" &&
+              Array.isArray(current.enum) &&
+              Object.keys(current).length === 2
+          })
+          if (literalTypes.length === types.length) {
+            const groups: Array<{ type: string; values: Array<unknown> }> = []
+            for (const current of types as Array<JsonSchema.JsonSchema>) {
+              const groupType = current.type as string
+              const last = groups[groups.length - 1]
+              if (!last || last.type !== groupType) {
+                groups.push({
+                  type: groupType,
+                  values: [...(current.enum as Array<unknown>)]
+                })
+                continue
+              }
+              for (const value of current.enum as Array<unknown>) {
+                if (!last.values.some((v) => Object.is(v, value))) {
+                  last.values.push(value)
+                }
+              }
+            }
+            if (groups.length === 1) {
+              return {
+                type: groups[0].type,
+                enum: groups[0].values
+              }
+            }
+            return {
+              anyOf: groups.map((group) => ({
+                type: group.type,
+                enum: group.values
+              }))
+            }
+          }
         }
         return schema.mode === "anyOf" ? { anyOf: types } : { oneOf: types }
       }
