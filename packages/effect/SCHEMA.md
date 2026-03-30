@@ -899,6 +899,38 @@ type Encoded = {
 type Encoded = typeof schema.Encoded
 ```
 
+### Renaming Encoded Keys
+
+Use `Schema.encodeKeys` to rename one or more keys only in the encoded representation of a struct.
+
+Pass a mapping of `{ decodedKey: encodedKey }`. During decoding, the schema expects the mapped encoded keys. During encoding, it produces those keys. Keys not in the mapping are left unchanged.
+
+Unlike `Struct.renameKeys`, this does not rename the struct's own field names. It only remaps keys at the encoding / decoding boundary.
+
+**Example** (Using snake_case keys in the encoded form)
+
+```ts
+import { Schema } from "effect"
+
+const schema = Schema.Struct({
+  userId: Schema.FiniteFromString,
+  accountName: Schema.String
+}).pipe(
+  Schema.encodeKeys({
+    userId: "user_id",
+    accountName: "account_name"
+  })
+)
+
+console.log(Schema.decodeUnknownSync(schema)({ user_id: "1", account_name: "alice" }))
+// { userId: 1, accountName: "alice" }
+
+console.log(Schema.encodeUnknownSync(schema)({ userId: 1, accountName: "alice" }))
+// { user_id: "1", account_name: "alice" }
+```
+
+If you are building a struct from reused fields or `Schema.fieldsAssign`, apply `Schema.encodeKeys` after defining the full struct.
+
 ### Reusing Fields
 
 Every `Schema.Struct` exposes a `.fields` property containing its field definitions. You can spread these fields into a new struct to reuse them, similar to how TypeScript interfaces use `extends`.
@@ -2200,6 +2232,8 @@ console.log(String(Schema.decodeUnknownExit(codec)("https://example.com")))
 While `Schema.declare` works for fixed types like `URL` or `File`, some types are **generic** — they contain other types as parameters. Think of `Array<A>`, `Option<A>`, or a custom `Box<A>`. The schema for `Box<number>` is different from `Box<string>` because the inner value has a different type.
 
 `Schema.declareConstructor` handles this by letting you define a **schema factory**: a function that takes schemas for the type parameters and returns a schema for the full type.
+
+> **Important:** `declareConstructor` is for types where the **container shape is the same** on both sides: only the inner type parameter changes (e.g. `Box<Encoded>` to `Box<Type>`). If you need to convert a structurally different type into your declared type (e.g. `T` to `Box<T>`), first declare `Box` with `declareConstructor`, then define a separate transformation schema to express the conversion.
 
 ### How the two-step call works
 

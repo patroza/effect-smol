@@ -6,6 +6,7 @@ import * as Duration from "../../Duration.ts"
 import * as Effect from "../../Effect.ts"
 import * as Exit from "../../Exit.ts"
 import * as Fiber from "../../Fiber.ts"
+import { constFalse } from "../../Function.ts"
 import * as Latch from "../../Latch.ts"
 import * as Layer from "../../Layer.ts"
 import * as Option from "../../Option.ts"
@@ -29,6 +30,8 @@ import * as Entity from "./Entity.ts"
 import * as EntityAddress from "./EntityAddress.ts"
 import * as EntityId from "./EntityId.ts"
 import * as EntityType from "./EntityType.ts"
+import * as Envelope from "./Envelope.ts"
+import * as Message from "./Message.ts"
 import { MessageStorage } from "./MessageStorage.ts"
 import type { WithExitEncoded } from "./Reply.ts"
 import * as Reply from "./Reply.ts"
@@ -66,7 +69,9 @@ export const make = Effect.gen(function*() {
       | Rpc.Rpc<"deferred", Schema.Struct<{ name: typeof Schema.String; exit: typeof ExitUnknown }>, typeof ExitUnknown>
       | Rpc.Rpc<
         "activity",
-        Schema.Struct<{ name: typeof Schema.String; attempt: typeof Schema.Number }>,
+        Schema.Struct<
+          { name: typeof Schema.String; attempt: typeof Schema.Number; withTransaction: typeof Schema.Boolean }
+        >,
         Schema.declare<Workflow.Result<any, any>>
       >
       | Rpc.Rpc<"resume", Schema.Struct<{}>>
@@ -128,6 +133,22 @@ export const make = Effect.gen(function*() {
   })
   const clockClient = yield* ClockEntity.client
 
+  const entityAddressFor = (options: {
+    readonly workflow: Workflow.Any
+    readonly entityType: string
+    readonly executionId: string
+  }) => {
+    const shardGroup = ServiceMap.get(options.workflow.annotations, ClusterSchema.ShardGroup)(
+      options.executionId as EntityId.EntityId
+    )
+    const entityId = EntityId.make(options.executionId)
+    return EntityAddress.make({
+      entityType: EntityType.make(options.entityType),
+      entityId,
+      shardId: sharding.getShardId(entityId, shardGroup)
+    })
+  }
+
   const requestIdFor = Effect.fnUntraced(function*(options: {
     readonly workflow: Workflow.Any
     readonly entityType: string
@@ -135,15 +156,7 @@ export const make = Effect.gen(function*() {
     readonly tag: string
     readonly id: string
   }) {
-    const shardGroup = ServiceMap.get(options.workflow.annotations, ClusterSchema.ShardGroup)(
-      options.executionId as EntityId.EntityId
-    )
-    const entityId = EntityId.make(options.executionId)
-    const address = EntityAddress.make({
-      entityType: EntityType.make(options.entityType),
-      entityId,
-      shardId: sharding.getShardId(entityId, shardGroup)
-    })
+    const address = entityAddressFor(options)
     return yield* storage.requestIdForPrimaryKey({ address, tag: options.tag, id: options.id })
   })
 
@@ -249,6 +262,46 @@ export const make = Effect.gen(function*() {
     if (Option.isNone(reply)) return
     yield* sharding.reset(requestId.value)
   }, Effect.scoped)
+
+  const interrupt = Effect.fnUntraced(
+    function*(workflow: Workflow.Any, executionId: string) {
+      ensureEntity(workflow)
+      const requestId = yield* requestIdFor({
+        workflow,
+        entityType: `Workflow/${workflow.name}`,
+        executionId,
+        tag: "run",
+        id: ""
+      })
+      if (Option.isNone(requestId)) {
+        return Option.none()
+      }
+      const reply = yield* replyForRequestId(requestId.value)
+
+      const nonSuspendedReply = Option.filter(
+        reply,
+        (reply) => reply.exit._tag !== "Success" || reply.exit.value._tag !== "Suspended"
+      )
+      if (Option.isSome(nonSuspendedReply)) {
+        return Option.none()
+      }
+
+      yield* engine.deferredDone(InterruptSignal, {
+        workflowName: workflow.name,
+        executionId,
+        deferredName: InterruptSignal.name,
+        exit: Exit.void
+      })
+
+      return requestId
+    },
+    Effect.retry({
+      while: (e) => e._tag === "PersistenceError",
+      times: 3,
+      schedule: Schedule.exponential(250)
+    }),
+    Effect.orDie
+  )
 
   const engine = WorkflowEngine.makeUnsafe({
     register: (workflow, execute) =>
@@ -383,39 +436,28 @@ export const make = Effect.gen(function*() {
       return Option.some(yield* exit)
     }, Effect.orDie),
 
-    interrupt: Effect.fnUntraced(
-      function*(workflow, executionId) {
-        ensureEntity(workflow)
-        const reply = yield* requestReply({
-          workflow,
-          entityType: `Workflow/${workflow.name}`,
-          executionId,
-          tag: "run",
-          id: ""
-        })
-
-        const nonSuspendedReply = Option.filter(
-          reply,
-          (reply) => reply.exit._tag !== "Success" || reply.exit.value._tag !== "Suspended"
-        )
-        if (Option.isSome(nonSuspendedReply)) {
-          return
-        }
-
-        yield* engine.deferredDone(InterruptSignal, {
-          workflowName: workflow.name,
-          executionId,
-          deferredName: InterruptSignal.name,
-          exit: Exit.void
-        })
-      },
-      Effect.retry({
-        while: (e) => e._tag === "PersistenceError",
-        times: 3,
-        schedule: Schedule.exponential(250)
-      }),
-      Effect.orDie
-    ),
+    interrupt: (workflow, executionId) => Effect.asVoid(interrupt(workflow, executionId)),
+    interruptUnsafe: Effect.fnUntraced(function*(workflow, executionId) {
+      const requestId = yield* interrupt(workflow, executionId)
+      if (Option.isNone(requestId)) return
+      const entity = ensureEntity(workflow)
+      const runRpc = entity.protocol.requests.get("run")!
+      yield* Effect.orDie(sharding.sendOutgoing(
+        new Message.OutgoingEnvelope({
+          rpc: runRpc,
+          envelope: new Envelope.Interrupt({
+            id: yield* sharding.getSnowflake,
+            address: entityAddressFor({
+              workflow,
+              entityType: `Workflow/${workflow.name}`,
+              executionId
+            }),
+            requestId: requestId.value
+          })
+        }),
+        false
+      ))
+    }),
 
     resume: (workflow, executionId) => ensureSuccess(resume(workflow, executionId)),
 
@@ -435,7 +477,13 @@ export const make = Effect.gen(function*() {
               activityLatches.delete(activityId)
             }
           }
-          const result = yield* Effect.orDie(client.activity({ name: activity.name, attempt }))
+          const result = yield* Effect.orDie(
+            client.activity({
+              name: activity.name,
+              attempt,
+              withTransaction: ServiceMap.get(activity.annotations, ClusterSchema.WithTransaction)
+            })
+          )
           // If the activity has suspended and did not execute, we need to resume
           // it by resetting the attempt and re-executing.
           if (result._tag === "Suspended" && (activities.has(activityId) || interruptedActivities.has(activityId))) {
@@ -532,7 +580,10 @@ const ExitUnknown = Schema.Exit(AnyOrVoid, AnyOrVoid, Schema.Any)
 const ActivityRpc = Rpc.make("activity", {
   payload: {
     name: Schema.String,
-    attempt: Schema.Number
+    attempt: Schema.Number,
+    withTransaction: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(constFalse)
+    )
   },
   primaryKey: ({ attempt, name }) => activityPrimaryKey(name, attempt),
   success: Workflow.Result({
@@ -541,6 +592,13 @@ const ActivityRpc = Rpc.make("activity", {
   })
 })
   .annotate(ClusterSchema.Persisted, true)
+  .annotate(
+    ClusterSchema.Dynamic,
+    (annotations, request) =>
+      (request.payload as any).withTransaction
+        ? ServiceMap.add(annotations, ClusterSchema.WithTransaction, true)
+        : annotations
+  )
 
 const DeferredRpc = Rpc.make("deferred", {
   payload: {
