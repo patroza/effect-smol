@@ -42,6 +42,19 @@ import * as RpcWorker from "./RpcWorker.ts"
 import { withRunClient } from "./Utils.ts"
 
 /**
+ * Element shape produced by stream calls invoked with
+ * `withValueHeaders: true`. Pairs each emission with the per-value response
+ * headers attached on the server via `Rpc.withValueHeaders`.
+ *
+ * @since 4.0.0
+ * @category client
+ */
+export interface ValueWithHeaders<A> {
+  readonly value: A
+  readonly headers: Headers.Headers
+}
+
+/**
  * @since 4.0.0
  * @category client
  */
@@ -60,6 +73,7 @@ export declare namespace RpcClient {
     readonly [Current in Rpcs as Current["_tag"]]: <
       const AsQueue extends boolean = false,
       const Discard = false,
+      const WithValueHeaders extends boolean = false,
       HE = never,
       HR = never
     >(
@@ -71,6 +85,7 @@ export declare namespace RpcClient {
           readonly context?: Context.Context<never> | undefined
           readonly onResponseHeaders?: ((headers: Headers.Headers) => Effect.Effect<void, HE, HR>) | undefined
           readonly onResponseHeadersSync?: ((headers: Headers.Headers) => void) | undefined
+          readonly withValueHeaders?: WithValueHeaders | undefined
         } :
         {
           readonly headers?: Headers.Input | undefined
@@ -88,7 +103,7 @@ export declare namespace RpcClient {
       infer _Requires
     > ? [_Success] extends [RpcSchema.Stream<infer _A, infer _E>] ? AsQueue extends true ? Effect.Effect<
             Queue.Dequeue<
-              _A["Type"],
+              WithValueHeaders extends true ? ValueWithHeaders<_A["Type"]> : _A["Type"],
               | _E["Type"]
               | _Error["Type"]
               | E
@@ -106,7 +121,7 @@ export declare namespace RpcClient {
             | _Middleware["error"]["DecodingServices"]
           >
         : Stream.Stream<
-          _A["Type"],
+          WithValueHeaders extends true ? ValueWithHeaders<_A["Type"]> : _A["Type"],
           _E["Type"] | _Error["Type"] | E | HE | _Middleware["error"]["Type"] | _Middleware["~ClientError"],
           | HR
           | _Payload["EncodingServices"]
@@ -138,6 +153,7 @@ export declare namespace RpcClient {
     const Tag extends Rpcs["_tag"],
     const AsQueue extends boolean = false,
     const Discard = false,
+    const WithValueHeaders extends boolean = false,
     HE = never,
     HR = never
   >(
@@ -150,6 +166,7 @@ export declare namespace RpcClient {
         readonly context?: Context.Context<never> | undefined
         readonly onResponseHeaders?: ((headers: Headers.Headers) => Effect.Effect<void, HE, HR>) | undefined
         readonly onResponseHeadersSync?: ((headers: Headers.Headers) => void) | undefined
+        readonly withValueHeaders?: WithValueHeaders | undefined
       } :
       {
         readonly headers?: Headers.Input | undefined
@@ -167,7 +184,7 @@ export declare namespace RpcClient {
     infer _Requires
   > ? [_Success] extends [RpcSchema.Stream<infer _A, infer _E>] ? AsQueue extends true ? Effect.Effect<
           Queue.Dequeue<
-            _A["Type"],
+            WithValueHeaders extends true ? ValueWithHeaders<_A["Type"]> : _A["Type"],
             _E["Type"] | _Error["Type"] | E | HE | _Middleware["error"]["Type"] | _Middleware["~ClientError"]
           >,
           never,
@@ -179,7 +196,7 @@ export declare namespace RpcClient {
           | _Middleware["error"]["DecodingServices"]
         >
       : Stream.Stream<
-        _A["Type"],
+        WithValueHeaders extends true ? ValueWithHeaders<_A["Type"]> : _A["Type"],
         _E["Type"] | _Error["Type"] | E | HE | _Middleware["error"]["Type"] | _Middleware["~ClientError"],
         | HR
         | _Payload["EncodingServices"]
@@ -282,6 +299,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
     readonly parentContext: Context.Context<never>
     readonly onResponseHeaders?: ((headers: Headers.Headers) => Effect.Effect<void, any, any>) | undefined
     readonly onResponseHeadersSync?: ((headers: Headers.Headers) => void) | undefined
+    readonly withValueHeaders?: boolean | undefined
   }
   const entries = new Map<RequestId, ClientEntry>()
 
@@ -318,6 +336,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
       readonly discard?: boolean | undefined
       readonly onResponseHeaders?: ((headers: Headers.Headers) => Effect.Effect<void, any, any>) | undefined
       readonly onResponseHeadersSync?: ((headers: Headers.Headers) => void) | undefined
+      readonly withValueHeaders?: boolean | undefined
     }) => {
       const headers = opts?.headers ? Headers.fromInput(opts.headers) : Headers.empty
       const context = opts?.context ?? Context.empty()
@@ -348,7 +367,8 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
         opts?.streamBufferSize ?? 16,
         context,
         opts?.onResponseHeaders,
-        opts?.onResponseHeadersSync
+        opts?.onResponseHeadersSync,
+        opts?.withValueHeaders ?? false
       )
       if (opts?.asQueue) return queue
       return Stream.unwrap(Effect.map(queue, Stream.fromQueue))
@@ -450,7 +470,8 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
     streamBufferSize: number,
     context: Context.Context<never>,
     onResponseHeaders: ((headers: Headers.Headers) => Effect.Effect<void, any, any>) | undefined,
-    onResponseHeadersSync: ((headers: Headers.Headers) => void) | undefined
+    onResponseHeadersSync: ((headers: Headers.Headers) => void) | undefined,
+    withValueHeaders: boolean
   ) {
     if (isShutdown) {
       return yield* Effect.interrupt
@@ -487,7 +508,8 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
       context,
       parentContext: fiber.context,
       onResponseHeaders,
-      onResponseHeadersSync
+      onResponseHeadersSync,
+      withValueHeaders
     })
 
     yield* middleware(
@@ -590,8 +612,14 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
         const headersEffect: Effect.Effect<void> = entry.onResponseHeaders
           ? Effect.provideContext(entry.onResponseHeaders(message.headers), entry.parentContext) as any
           : Effect.void
+        const items = entry.withValueHeaders
+          ? message.values.map((value, i) => ({
+            value,
+            headers: message.valueHeaders?.[i] ?? Headers.empty
+          }))
+          : message.values
         return headersEffect.pipe(
-          Effect.flatMap(() => Queue.offerAll(entry.queue, message.values)),
+          Effect.flatMap(() => Queue.offerAll(entry.queue, items)),
           supportsAck
             ? Effect.flatMap(() =>
               options.onFromClient({
@@ -773,11 +801,21 @@ export const make: <Rpcs extends Rpc.Any, const Flatten extends boolean = false>
         const entry = entries.get(requestId)
         if (!entry || Option.isNone(entry.schemas.decodeChunk)) return Effect.void
         const headers = Headers.fromInput(message.headers)
+        const valueHeaders = message.valueHeaders
+          ? message.valueHeaders.map((h) => Headers.fromInput(h))
+          : undefined
         return entry.schemas.decodeChunk.value(message.values).pipe(
           Effect.provideContext(entry.context),
           Effect.orDie,
           Effect.flatMap((chunk) =>
-            write({ _tag: "Chunk", clientId: 0, requestId: RequestId(message.requestId), values: chunk, headers })
+            write({
+              _tag: "Chunk",
+              clientId: 0,
+              requestId: RequestId(message.requestId),
+              values: chunk,
+              headers,
+              valueHeaders
+            })
           ),
           Effect.onError((cause) =>
             write({

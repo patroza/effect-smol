@@ -216,7 +216,8 @@ function decodeJsonRpcMessage(decoded: JsonRpcMessage): RpcMessage.FromClientEnc
       _tag: "Chunk",
       requestId: String(decoded.id),
       values: decoded.result as any,
-      headers: decoded.headers ?? []
+      headers: decoded.headers ?? [],
+      valueHeaders: decoded.valueHeaders
     }
   }
   return {
@@ -332,7 +333,8 @@ function encodeJsonRpcMessage(response: RpcMessage.FromServerEncoded | RpcMessag
         chunk: true,
         id: Number(response.requestId),
         result: response.values,
-        headers: response.headers
+        headers: response.headers,
+        ...(response.valueHeaders ? { valueHeaders: response.valueHeaders } : {})
       }
     case "Exit": {
       if (response.exit._tag === "Success") {
@@ -395,6 +397,7 @@ interface JsonRpcResponse {
   readonly result?: unknown
   readonly chunk?: boolean
   readonly headers?: ReadonlyArray<[string, string]>
+  readonly valueHeaders?: ReadonlyArray<ReadonlyArray<[string, string]>>
   readonly error?: {
     readonly code: number
     readonly message: string

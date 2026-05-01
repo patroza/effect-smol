@@ -176,6 +176,7 @@ export interface ResponseChunkEncoded {
   readonly requestId: string
   readonly values: NonEmptyReadonlyArray<unknown>
   readonly headers: ReadonlyArray<[string, string]>
+  readonly valueHeaders?: ReadonlyArray<ReadonlyArray<[string, string]>> | undefined
 }
 
 /**
@@ -188,6 +189,7 @@ export interface ResponseChunk<A extends Rpc.Any> {
   readonly requestId: RequestId
   readonly values: NonEmptyReadonlyArray<Rpc.SuccessChunk<A>>
   readonly headers: Headers
+  readonly valueHeaders?: ReadonlyArray<Headers> | undefined
 }
 
 /**

@@ -241,6 +241,58 @@ export const mergeResponseHeaders = (headers: Headers): Effect.Effect<void> =>
     }))
 
 /**
+ * @since 4.0.0
+ * @category headers
+ */
+export const WithValueHeadersTypeId: unique symbol = Symbol.for("effect/rpc/Rpc/WithValueHeaders")
+
+/**
+ * @since 4.0.0
+ * @category headers
+ */
+export type WithValueHeadersTypeId = typeof WithValueHeadersTypeId
+
+/**
+ * Wrapper produced by {@link withValueHeaders} that attaches a per-element
+ * `Headers` value to a single emission of a streaming Rpc handler.
+ *
+ * The `RpcServer` strips the wrapper before serializing the chunk and forwards
+ * the headers through the protocol's optional `valueHeaders` array. On the
+ * client side, opting in via `withValueHeaders: true` exposes each value as
+ * `{ value, headers }` instead of the raw value.
+ *
+ * @since 4.0.0
+ * @category headers
+ */
+export class WithValueHeaders<out A> {
+  readonly [WithValueHeadersTypeId]: WithValueHeadersTypeId = WithValueHeadersTypeId
+  readonly value: A
+  readonly headers: Headers
+  constructor(value: A, headers: Headers) {
+    this.value = value
+    this.headers = headers
+  }
+}
+
+/**
+ * Wrap a stream emission with per-value response headers. Only meaningful
+ * inside a streaming Rpc handler — pairs with the client `withValueHeaders`
+ * option.
+ *
+ * @since 4.0.0
+ * @category headers
+ */
+export const withValueHeaders = <A>(value: A, input: Headers_.Input): WithValueHeaders<A> =>
+  new WithValueHeaders(value, Headers_.fromInput(input))
+
+/**
+ * @since 4.0.0
+ * @category headers
+ */
+export const isWithValueHeaders = (u: unknown): u is WithValueHeaders<any> =>
+  Predicate.hasProperty(u, WithValueHeadersTypeId)
+
+/**
  * Represents an implemented rpc.
  *
  * @since 4.0.0
@@ -657,12 +709,15 @@ export type ResultFrom<R extends Any, Services> = R extends Rpc<
   infer _Requires
 > ? [_Success] extends [RpcSchema.Stream<infer _SA, infer _SE>] ?
       | Stream<
-        _SA["Type"],
+        _SA["Type"] | WithValueHeaders<_SA["Type"]>,
         _SE["Type"] | _Error["Type"],
         Services
       >
       | Effect.Effect<
-        Queue.Dequeue<_SA["Type"], _SE["Type"] | _Error["Type"] | Cause.Done>,
+        Queue.Dequeue<
+          _SA["Type"] | WithValueHeaders<_SA["Type"]>,
+          _SE["Type"] | _Error["Type"] | Cause.Done
+        >,
         _SE["Type"] | Schema.Schema.Type<_Error>,
         Services
       > :

@@ -9,6 +9,11 @@ const TestGroup = RpcGroup.make(
     payload: { count: Schema.Number },
     success: Schema.Number,
     stream: true
+  }),
+  Rpc.make("CounterPerValue", {
+    payload: { count: Schema.Number },
+    success: Schema.Number,
+    stream: true
   })
 )
 
@@ -22,6 +27,10 @@ const TestHandlers = TestGroup.toLayer({
   Counter: (req) =>
     Stream.range(1, req.count).pipe(
       Stream.tap(() => Rpc.setResponseHeader("x-stream", "on"))
+    ),
+  CounterPerValue: (req) =>
+    Stream.range(1, req.count).pipe(
+      Stream.map((n) => Rpc.withValueHeaders(n, { "x-seq": String(n) }))
     )
 })
 
@@ -98,6 +107,29 @@ describe("Rpc response headers", () => {
       assert.strictEqual(result, "ok")
       assert.strictEqual(headerValue(headers, "x-echo"), "ok")
       assert.strictEqual(headerValue(headers, "x-extra"), "1")
+    }).pipe(Effect.provide(TestHandlers)))
+
+  it.effect("withValueHeaders pairs each emission with its per-value headers", () =>
+    Effect.gen(function*() {
+      const client = yield* RpcTest.makeClient(TestGroup)
+      const stream = client.CounterPerValue({ count: 3 }, { withValueHeaders: true })
+      const items = yield* Stream.runCollect(stream)
+      assert.deepStrictEqual([...items].map((it) => it.value), [1, 2, 3])
+      assert.deepStrictEqual(
+        [...items].map((it) => headerValue(it.headers, "x-seq")),
+        ["1", "2", "3"]
+      )
+    }).pipe(Effect.provide(TestHandlers)))
+
+  it.effect("withValueHeaders defaults to empty headers when handler does not wrap", () =>
+    Effect.gen(function*() {
+      const client = yield* RpcTest.makeClient(TestGroup)
+      const stream = client.Counter({ count: 2 }, { withValueHeaders: true })
+      const items = yield* Stream.runCollect(stream)
+      assert.deepStrictEqual([...items].map((it) => it.value), [1, 2])
+      for (const item of items) {
+        assert.strictEqual(headerValue(item.headers, "x-seq"), undefined)
+      }
     }).pipe(Effect.provide(TestHandlers)))
 
   it("jsonRpc serialization round-trips response headers on Exit", () => {

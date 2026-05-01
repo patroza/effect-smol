@@ -59,6 +59,29 @@ export interface RpcServer<A extends Rpc.Any> {
   readonly disconnect: (clientId: number) => Effect.Effect<void>
 }
 
+const partitionValueHeaders = (
+  rawValues: ReadonlyArray<unknown>
+): {
+  readonly values: ReadonlyArray<unknown>
+  readonly valueHeaders: ReadonlyArray<Headers.Headers> | undefined
+} => {
+  let hasAny = false
+  const headersOut = new Array<Headers.Headers>(rawValues.length)
+  const values = new Array<unknown>(rawValues.length)
+  for (let i = 0; i < rawValues.length; i++) {
+    const v = rawValues[i]
+    if (Rpc.isWithValueHeaders(v)) {
+      hasAny = true
+      headersOut[i] = v.headers
+      values[i] = v.value
+    } else {
+      headersOut[i] = Headers.empty
+      values[i] = v
+    }
+  }
+  return { values, valueHeaders: hasAny ? headersOut : undefined }
+}
+
 /**
  * @since 4.0.0
  * @category server
@@ -399,13 +422,15 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any>(
           Effect.whileLoop({
             while: constTrue,
             body: constant(
-              Effect.flatMap(Queue.takeAll(queue), (values) => {
+              Effect.flatMap(Queue.takeAll(queue), (rawValues) => {
+                const partitioned = partitionValueHeaders(rawValues)
                 const write = options.onFromServer({
                   _tag: "Chunk",
                   clientId: client.id,
                   requestId: request.id,
-                  values,
-                  headers: responseHeaders.current
+                  values: partitioned.values as NonEmptyReadonlyArray<any>,
+                  headers: responseHeaders.current,
+                  valueHeaders: partitioned.valueHeaders
                 })
                 if (!latch) return write
                 latch.closeUnsafe()
@@ -419,13 +444,15 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any>(
         Effect.scoped
       )
     }
-    return Stream.runForEachArray(stream, (values) => {
+    return Stream.runForEachArray(stream, (rawValues) => {
+      const partitioned = partitionValueHeaders(rawValues)
       const write = options.onFromServer({
         _tag: "Chunk",
         clientId: client.id,
         requestId: request.id,
-        values,
-        headers: responseHeaders.current
+        values: partitioned.values as NonEmptyReadonlyArray<any>,
+        headers: responseHeaders.current,
+        valueHeaders: partitioned.valueHeaders
       })
       if (!latch) return write
       latch.closeUnsafe()
@@ -527,13 +554,22 @@ export const make: <Rpcs extends Rpc.Any>(
           const schemas = client.schemas.get(response.requestId)
           if (!schemas) return Effect.void
           const encodedHeaders = Object.entries(response.headers)
+          const encodedValueHeaders = response.valueHeaders
+            ? response.valueHeaders.map((h) => Object.entries(h))
+            : undefined
           return handleEncode(
             client,
             response.requestId,
             schemas.encodeDefect,
             schemas.collector,
             Effect.provideContext(schemas.encodeChunk(response.values), schemas.context),
-            (values) => ({ _tag: "Chunk", requestId: String(response.requestId), values, headers: encodedHeaders })
+            (values) => ({
+              _tag: "Chunk",
+              requestId: String(response.requestId),
+              values,
+              headers: encodedHeaders,
+              valueHeaders: encodedValueHeaders
+            })
           )
         }
         case "Exit": {

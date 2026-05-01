@@ -38,19 +38,23 @@ Three options on the call site:
 
 ```ts
 // 1. withResponseHeaders — wrap the call, get [result, headers]
-const [user, headers] = yield* RpcClient.withResponseHeaders(client.GetUser({ id: 1 }))
+const [user, headers] = yield * RpcClient.withResponseHeaders(client.GetUser({ id: 1 }))
 
 // 2. onResponseHeaders — Effect callback. Its E and R bubble into the call's
 //    error and requirements. Failures propagate into the result Cause.
-yield* client.GetUser(
+yield * client.GetUser(
   { id: 1 },
   { onResponseHeaders: (h) => Logger.log(`headers: ${JSON.stringify(h)}`) }
 )
 
 // 3. onResponseHeadersSync — fire-and-forget sync callback
-yield* client.GetUser(
+yield * client.GetUser(
   { id: 1 },
-  { onResponseHeadersSync: (h) => { lastHeaders = h } }
+  {
+    onResponseHeadersSync: (h) => {
+      lastHeaders = h
+    }
+  }
 )
 ```
 
