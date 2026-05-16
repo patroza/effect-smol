@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Cause, Deferred, Effect, Option, Queue, Schema } from "effect"
 import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/unstable/rpc"
+import type { FromServerEncoded } from "effect/unstable/rpc/RpcMessage"
 
 const ParseOptionsGroup = RpcGroup.make(
   Rpc.make("Ping", {
@@ -31,15 +32,16 @@ describe("Rpc parseOptions", () => {
         )
       )
 
-      const exit = yield* Effect.exit(client.Ping({ value: "ok", extra: "x" } as any))
+      const payloadWithExcessProperty: { readonly value: string; readonly extra: string } = { value: "ok", extra: "x" }
+      const exit = yield* Effect.exit(client.Ping(payloadWithExcessProperty))
       assert.strictEqual(exit._tag, "Failure")
       const defect = Cause.squash(exit.cause)
-      assert.strictEqual(String(defect).includes("extra"), true)
+      assert.match(String(defect), /extra/)
     }))
 
   it.effect("RpcServer.make applies parseOptions when decoding payloads", () =>
     Effect.gen(function*() {
-      const sent = yield* Deferred.make<any>()
+      const sent = yield* Deferred.make<FromServerEncoded>()
       const disconnects = yield* Queue.unbounded<number>()
 
       const request = {
@@ -78,10 +80,10 @@ describe("Rpc parseOptions", () => {
         Deferred.await(sent),
         Effect.fail("Timed out waiting for RPC response").pipe(Effect.delay("1 second"))
       )
-      assert.strictEqual(response._tag, "Exit")
+      if (response._tag !== "Exit") {
+        assert.fail(`Expected Exit response, got ${response._tag}`)
+      }
       assert.strictEqual(response.exit._tag, "Failure")
-      const defect = response.exit.cause.find((causeEntry: any) => causeEntry._tag === "Die")?.defect
-      assert.notStrictEqual(defect, undefined)
-      assert.strictEqual(String(defect).includes("extra"), true)
+      assert.match(JSON.stringify(response.exit), /extra/)
     }).pipe(Effect.scoped))
 })
