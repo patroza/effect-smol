@@ -623,7 +623,11 @@ export const make: <Rpcs extends Rpc.Any, const Flatten extends boolean = false>
 ) {
   const clientId = clientIdCounter++
   const { run, send, supportsAck, supportsTransferables } = yield* Protocol
-  const getRpcSchemas = makeRpcSchemas(options?.parseOptions)
+  const parseConcurrency = options?.parseOptions?.concurrency
+  const parseOptions: RpcParseOptions | undefined = parseConcurrency !== undefined
+    ? { concurrency: parseConcurrency }
+    : undefined
+  const getRpcSchemas = makeRpcSchemas(parseOptions)
 
   type ClientEntry = {
     readonly rpc: Rpc.AnyWithProps

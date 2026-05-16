@@ -504,7 +504,10 @@ export const make: <Rpcs extends Rpc.Any>(
   } = yield* Protocol
   const services = yield* Effect.context<Rpc.ToHandler<Rpcs> | Rpc.Middleware<Rpcs>>()
   const scope = yield* Scope.make()
-  const parseOptions = options?.parseOptions
+  const parseConcurrency = options?.parseOptions?.concurrency
+  const parseOptions: RpcParseOptions | undefined = parseConcurrency !== undefined
+    ? { concurrency: parseConcurrency }
+    : undefined
 
   const server = yield* makeNoSerialization(group, {
     ...options,

@@ -14,13 +14,15 @@ const ParseOptionsGroup = RpcGroup.make(
 )
 
 describe("Rpc parseOptions", () => {
-  it.effect("RpcClient.make accepts parseOptions concurrency", () =>
+  it.effect("RpcClient.make forwards only parseOptions concurrency", () =>
     Effect.gen(function*() {
       const sent = yield* Deferred.make<FromClientEncoded>()
+      const parseOptionsWithExcessProperty = {
+        concurrency: "unbounded" as const,
+        onExcessProperty: "error" as const
+      }
       const client = yield* RpcClient.make(ParseOptionsGroup, {
-        parseOptions: {
-          concurrency: "unbounded"
-        }
+        parseOptions: parseOptionsWithExcessProperty
       }).pipe(
         Effect.provideService(
           RpcClient.Protocol,
@@ -32,16 +34,22 @@ describe("Rpc parseOptions", () => {
           })
         )
       )
-      yield* client.Ping({ value: "ok" }, { discard: true })
+      const payloadWithExcessProperty = { value: "ok", extra: "x" }
+      const exit = yield* Effect.exit(client.Ping(payloadWithExcessProperty, { discard: true }))
+      assert.strictEqual(exit._tag, "Success")
       const request = yield* Deferred.await(sent)
       assert.strictEqual(request._tag, "Request")
-      assert.deepStrictEqual(request.payload, { value: "ok" })
+      assert.strictEqual(Object.hasOwn(request.payload, "extra"), false)
     }).pipe(Effect.scoped))
 
-  it.effect("RpcServer.make accepts parseOptions concurrency", () =>
+  it.effect("RpcServer.make forwards only parseOptions concurrency", () =>
     Effect.gen(function*() {
       const sent = yield* Deferred.make<FromServerEncoded>()
       const disconnects = yield* Queue.unbounded<number>()
+      const parseOptionsWithExcessProperty = {
+        concurrency: "unbounded" as const,
+        onExcessProperty: "error" as const
+      }
 
       const request = {
         _tag: "Request",
@@ -52,9 +60,7 @@ describe("Rpc parseOptions", () => {
       } as const
 
       const server = RpcServer.make(ParseOptionsGroup, {
-        parseOptions: {
-          concurrency: "unbounded"
-        }
+        parseOptions: parseOptionsWithExcessProperty
       }).pipe(
         Effect.provideService(
           RpcServer.Protocol,
