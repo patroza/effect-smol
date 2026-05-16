@@ -80,7 +80,7 @@ describe("Rpc parseOptions", () => {
       )
       assert.strictEqual(response._tag, "Exit")
       assert.strictEqual(response.exit._tag, "Failure")
-      const defect = response.exit.cause.find((item: any) => item._tag === "Die")?.defect
+      const defect = response.exit.cause.find((causeEntry: any) => causeEntry._tag === "Die")?.defect
       assert.notStrictEqual(defect, undefined)
       assert.strictEqual(String(defect).includes("extra"), true)
     }).pipe(Effect.scoped))
