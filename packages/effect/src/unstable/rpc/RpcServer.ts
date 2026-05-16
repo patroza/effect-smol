@@ -18,6 +18,7 @@ import * as Pull from "../../Pull.ts"
 import * as Queue from "../../Queue.ts"
 import * as Schedule from "../../Schedule.ts"
 import * as Schema from "../../Schema.ts"
+import type * as AST from "../../SchemaAST.ts"
 import * as Scope from "../../Scope.ts"
 import * as Semaphore from "../../Semaphore.ts"
 import { Stdio } from "../../Stdio.ts"
@@ -469,6 +470,7 @@ export const make: <Rpcs extends Rpc.Any>(
       readonly spanAttributes?: Record<string, unknown> | undefined
       readonly concurrency?: number | "unbounded" | undefined
       readonly disableFatalDefects?: boolean | undefined
+      readonly parseOptions?: AST.ParseOptions | undefined
     }
     | undefined
 ) => Effect.Effect<
@@ -486,6 +488,7 @@ export const make: <Rpcs extends Rpc.Any>(
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly concurrency?: number | "unbounded" | undefined
     readonly disableFatalDefects?: boolean | undefined
+    readonly parseOptions?: AST.ParseOptions | undefined
   }
 ) {
   const {
@@ -499,6 +502,7 @@ export const make: <Rpcs extends Rpc.Any>(
   } = yield* Protocol
   const services = yield* Effect.context<Rpc.ToHandler<Rpcs> | Rpc.Middleware<Rpcs>>()
   const scope = yield* Scope.make()
+  const parseOptions = options?.parseOptions
 
   const server = yield* makeNoSerialization(group, {
     ...options,
@@ -576,14 +580,15 @@ export const make: <Rpcs extends Rpc.Any>(
       const entry = services.mapUnsafe.get(rpc.key) as Rpc.Handler<Rpcs["_tag"]>
       const streamSchemas = RpcSchema.getStreamSchemas(rpc.successSchema)
       schemas = {
-        decode: Schema.decodeUnknownEffect(Schema.toCodecJson(rpc.payloadSchema)) as any,
+        decode: Schema.decodeUnknownEffect(Schema.toCodecJson(rpc.payloadSchema), parseOptions) as any,
         encodeChunk: Schema.encodeUnknownEffect(
           Schema.toCodecJson(
             Schema.Array(Option.isSome(streamSchemas) ? streamSchemas.value.success : Schema.Any)
-          )
+          ),
+          parseOptions
         ) as any,
-        encodeExit: Schema.encodeUnknownEffect(Schema.toCodecJson(Rpc.exitSchema(rpc as any))) as any,
-        encodeDefect: Schema.encodeUnknownEffect(Schema.toCodecJson(rpc.defectSchema)) as any,
+        encodeExit: Schema.encodeUnknownEffect(Schema.toCodecJson(Rpc.exitSchema(rpc as any)), parseOptions) as any,
+        encodeDefect: Schema.encodeUnknownEffect(Schema.toCodecJson(rpc.defectSchema), parseOptions) as any,
         context: entry.context
       }
       schemasCache.set(rpc, schemas)
@@ -744,6 +749,7 @@ export const layer = <Rpcs extends Rpc.Any>(
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly concurrency?: number | "unbounded" | undefined
     readonly disableFatalDefects?: boolean | undefined
+    readonly parseOptions?: AST.ParseOptions | undefined
   }
 ): Layer.Layer<
   never,
@@ -772,6 +778,7 @@ export const layerHttp = <Rpcs extends Rpc.Any>(options: {
   readonly spanAttributes?: Record<string, unknown> | undefined
   readonly concurrency?: number | "unbounded" | undefined
   readonly disableFatalDefects?: boolean | undefined
+  readonly parseOptions?: AST.ParseOptions | undefined
 }): Layer.Layer<
   never,
   never,
@@ -1113,6 +1120,7 @@ export const toHttpEffect: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
+    readonly parseOptions?: AST.ParseOptions | undefined
   } | undefined
 ) => Effect.Effect<
   Effect.Effect<HttpServerResponse.HttpServerResponse, never, Scope.Scope | HttpServerRequest.HttpServerRequest>,
@@ -1129,6 +1137,7 @@ export const toHttpEffect: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
+    readonly parseOptions?: AST.ParseOptions | undefined
   }
 ) {
   const { httpEffect, protocol } = yield* makeProtocolWithHttpEffect
@@ -1151,6 +1160,7 @@ export const toHttpEffectWebsocket: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
+    readonly parseOptions?: AST.ParseOptions | undefined
   } | undefined
 ) => Effect.Effect<
   Effect.Effect<HttpServerResponse.HttpServerResponse, never, Scope.Scope | HttpServerRequest.HttpServerRequest>,
@@ -1167,6 +1177,7 @@ export const toHttpEffectWebsocket: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
+    readonly parseOptions?: AST.ParseOptions | undefined
   }
 ) {
   const { httpEffect, protocol } = yield* makeProtocolWithHttpEffectWebsocket
