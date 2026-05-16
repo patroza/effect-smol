@@ -51,6 +51,8 @@ import * as RpcSerialization from "./RpcSerialization.ts"
 import type { InitialMessage } from "./RpcWorker.ts"
 import { withRun } from "./Utils.ts"
 
+type RpcParseOptions = Pick<AST.ParseOptions, "concurrency">
+
 /**
  * @since 4.0.0
  * @category server
@@ -470,7 +472,7 @@ export const make: <Rpcs extends Rpc.Any>(
       readonly spanAttributes?: Record<string, unknown> | undefined
       readonly concurrency?: number | "unbounded" | undefined
       readonly disableFatalDefects?: boolean | undefined
-      readonly parseOptions?: AST.ParseOptions | undefined
+      readonly parseOptions?: RpcParseOptions | undefined
     }
     | undefined
 ) => Effect.Effect<
@@ -488,7 +490,7 @@ export const make: <Rpcs extends Rpc.Any>(
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly concurrency?: number | "unbounded" | undefined
     readonly disableFatalDefects?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
   }
 ) {
   const {
@@ -749,7 +751,7 @@ export const layer = <Rpcs extends Rpc.Any>(
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly concurrency?: number | "unbounded" | undefined
     readonly disableFatalDefects?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
   }
 ): Layer.Layer<
   never,
@@ -778,7 +780,7 @@ export const layerHttp = <Rpcs extends Rpc.Any>(options: {
   readonly spanAttributes?: Record<string, unknown> | undefined
   readonly concurrency?: number | "unbounded" | undefined
   readonly disableFatalDefects?: boolean | undefined
-  readonly parseOptions?: AST.ParseOptions | undefined
+  readonly parseOptions?: RpcParseOptions | undefined
 }): Layer.Layer<
   never,
   never,
@@ -1120,7 +1122,7 @@ export const toHttpEffect: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
   } | undefined
 ) => Effect.Effect<
   Effect.Effect<HttpServerResponse.HttpServerResponse, never, Scope.Scope | HttpServerRequest.HttpServerRequest>,
@@ -1137,7 +1139,7 @@ export const toHttpEffect: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
   }
 ) {
   const { httpEffect, protocol } = yield* makeProtocolWithHttpEffect
@@ -1160,7 +1162,7 @@ export const toHttpEffectWebsocket: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
   } | undefined
 ) => Effect.Effect<
   Effect.Effect<HttpServerResponse.HttpServerResponse, never, Scope.Scope | HttpServerRequest.HttpServerRequest>,
@@ -1177,7 +1179,7 @@ export const toHttpEffectWebsocket: <Rpcs extends Rpc.Any>(
     readonly spanPrefix?: string | undefined
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly disableFatalDefects?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
   }
 ) {
   const { httpEffect, protocol } = yield* makeProtocolWithHttpEffectWebsocket

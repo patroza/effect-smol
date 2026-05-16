@@ -42,6 +42,8 @@ import * as RpcSerialization from "./RpcSerialization.ts"
 import * as RpcWorker from "./RpcWorker.ts"
 import { withRunClient } from "./Utils.ts"
 
+type RpcParseOptions = Pick<AST.ParseOptions, "concurrency">
+
 /**
  * @since 4.0.0
  * @category client
@@ -601,7 +603,7 @@ export const make: <Rpcs extends Rpc.Any, const Flatten extends boolean = false>
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly generateRequestId?: (() => RequestId) | undefined
     readonly disableTracing?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
     readonly flatten?: Flatten | undefined
   } | undefined
 ) => Effect.Effect<
@@ -615,7 +617,7 @@ export const make: <Rpcs extends Rpc.Any, const Flatten extends boolean = false>
     readonly spanAttributes?: Record<string, unknown> | undefined
     readonly generateRequestId?: (() => RequestId) | undefined
     readonly disableTracing?: boolean | undefined
-    readonly parseOptions?: AST.ParseOptions | undefined
+    readonly parseOptions?: RpcParseOptions | undefined
     readonly flatten?: Flatten | undefined
   } | undefined
 ) {
@@ -751,7 +753,7 @@ interface RpcSchemas {
   readonly encodePayload: (payload: any) => Effect.Effect<any, Schema.SchemaError, unknown>
   readonly decodeExit: (encoded: unknown) => Effect.Effect<Exit.Exit<any, any>, Schema.SchemaError, unknown>
 }
-const makeRpcSchemas = (parseOptions: AST.ParseOptions | undefined) => {
+const makeRpcSchemas = (parseOptions: RpcParseOptions | undefined) => {
   const rpcSchemasCache = new WeakMap<Rpc.AnyWithProps, RpcSchemas>()
   return (rpc: Rpc.AnyWithProps) => {
     let entry = rpcSchemasCache.get(rpc)

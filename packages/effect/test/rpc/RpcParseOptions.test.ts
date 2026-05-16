@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Option, Queue, Schema } from "effect"
+import { Deferred, Effect, Option, Queue, Schema } from "effect"
 import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/unstable/rpc"
-import type { FromServerEncoded } from "effect/unstable/rpc/RpcMessage"
+import type { FromClientEncoded, FromServerEncoded } from "effect/unstable/rpc/RpcMessage"
 
 const ParseOptionsGroup = RpcGroup.make(
   Rpc.make("Ping", {
@@ -14,32 +14,31 @@ const ParseOptionsGroup = RpcGroup.make(
 )
 
 describe("Rpc parseOptions", () => {
-  it.effect("RpcClient.make applies parseOptions when encoding payloads", () =>
+  it.effect("RpcClient.make accepts parseOptions concurrency", () =>
     Effect.gen(function*() {
+      const sent = yield* Deferred.make<FromClientEncoded>()
       const client = yield* RpcClient.make(ParseOptionsGroup, {
         parseOptions: {
-          onExcessProperty: "error"
+          concurrency: "unbounded"
         }
       }).pipe(
         Effect.provideService(
           RpcClient.Protocol,
           RpcClient.Protocol.of({
             run: () => Effect.never,
-            send: () => Effect.void,
+            send: (_clientId, request) => Deferred.succeed(sent, request),
             supportsAck: true,
             supportsTransferables: false
           })
         )
       )
+      yield* client.Ping({ value: "ok" }, { discard: true })
+      const request = yield* Deferred.await(sent)
+      assert.strictEqual(request._tag, "Request")
+      assert.deepStrictEqual(request.payload, { value: "ok" })
+    }).pipe(Effect.scoped))
 
-      const payloadWithExcessProperty: { readonly value: string; readonly extra: string } = { value: "ok", extra: "x" }
-      const exit = yield* Effect.exit(client.Ping(payloadWithExcessProperty))
-      assert.strictEqual(exit._tag, "Failure")
-      const defect = Cause.squash(exit.cause)
-      assert.match(String(defect), /extra/)
-    }))
-
-  it.effect("RpcServer.make applies parseOptions when decoding payloads", () =>
+  it.effect("RpcServer.make accepts parseOptions concurrency", () =>
     Effect.gen(function*() {
       const sent = yield* Deferred.make<FromServerEncoded>()
       const disconnects = yield* Queue.unbounded<number>()
@@ -54,7 +53,7 @@ describe("Rpc parseOptions", () => {
 
       const server = RpcServer.make(ParseOptionsGroup, {
         parseOptions: {
-          onExcessProperty: "error"
+          concurrency: "unbounded"
         }
       }).pipe(
         Effect.provideService(
@@ -83,7 +82,6 @@ describe("Rpc parseOptions", () => {
       if (response._tag !== "Exit") {
         assert.fail(`Expected Exit response, got ${response._tag}`)
       }
-      assert.strictEqual(response.exit._tag, "Failure")
-      assert.match(JSON.stringify(response.exit), /extra/)
+      assert.deepStrictEqual(response.exit, { _tag: "Success", value: "ok" })
     }).pipe(Effect.scoped))
 })

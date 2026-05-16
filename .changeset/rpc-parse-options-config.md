@@ -2,4 +2,4 @@
 "effect": patch
 ---
 
-Add configurable schema parse options to RPC client and server so parse behavior (for example concurrency and excess-property handling) can be customized per RPC instance.
+Add configurable schema parse concurrency to RPC client and server so schema parsing concurrency can be customized per RPC instance.
