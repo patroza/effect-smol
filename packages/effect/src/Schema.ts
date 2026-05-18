@@ -2659,6 +2659,29 @@ function makeEncodedFields<
   return { fields: encodedFields, reverseMapping } as any
 }
 
+type WithEncodedKeyMapping<
+  Fields extends Struct.Fields,
+  M extends { readonly [K in keyof Fields]?: PropertyKey }
+> = Simplify<
+  Readonly<{
+    [K in keyof Fields]: K extends keyof M ? M[K] extends PropertyKey ? encodedKey<Fields[K], M[K]> : Fields[K]
+      : Fields[K]
+  }>
+>
+
+function applyEncodedKeyMapping<
+  Fields extends Struct.Fields,
+  M extends { readonly [K in keyof Fields]?: PropertyKey }
+>(fields: Fields, mapping: M): WithEncodedKeyMapping<Fields, M> {
+  const out: any = {}
+  for (const key of Reflect.ownKeys(fields) as Array<keyof Fields & PropertyKey>) {
+    out[key] = Object.hasOwn(mapping, key) ? annotateKey<typeof fields[key]>({ encodedKey: mapping[key] })(fields[key]) : fields[
+      key
+    ]
+  }
+  return out
+}
+
 function getFieldEncodedKeyMapping<Fields extends Struct.Fields>(fields: Fields): {
   readonly [K in keyof Fields]?: PropertyKey
 } {
@@ -2776,7 +2799,15 @@ export interface encodeKeys<
       }
     >
   >
-{}
+{
+  readonly fields: WithEncodedKeyMapping<S["fields"], M>
+  mapFields<To extends Struct.Fields>(
+    f: (fields: WithEncodedKeyMapping<S["fields"], M>) => To,
+    options?: {
+      readonly unsafePreserveChecks?: boolean | undefined
+    } | undefined
+  ): Struct<Simplify<Readonly<To>>>
+}
 
 /**
  * Renames struct keys in the encoded form without changing the decoded type.
@@ -2800,6 +2831,9 @@ export interface encodeKeys<
  *
  * Field-local key renames created with {@link encodedKey} are applied first.
  * Calling `encodeKeys` lets you override or add an explicit mapping on top.
+ * The returned schema also exposes `fields`, with the mapping pushed down onto
+ * each field, so spreading or `mapFields`-based reuse keeps the renamed encoded
+ * keys for existing `encodeKeys` callers too.
  * ```
  *
  * @category Struct transformations
@@ -2811,13 +2845,17 @@ export function encodeKeys<
 >(mapping: M) {
   return function(self: S): encodeKeys<S, M> {
     const { fields, reverseMapping } = makeEncodedFields(self.fields, mapping)
-    return Struct(fields).pipe(decodeTo(
-      self,
-      Transformation.transform<any, any>({
-        decode: Struct_.renameKeys(reverseMapping),
-        encode: Struct_.renameKeys(mapping)
-      })
-    )) as any
+    const mappedFields = applyEncodedKeyMapping(self.fields, mapping)
+    return decorateStruct(
+      Struct(fields).pipe(decodeTo(
+        self,
+        Transformation.transform<any, any>({
+          decode: Struct_.renameKeys(reverseMapping),
+          encode: Struct_.renameKeys(mapping)
+        })
+      )),
+      mappedFields
+    ) as any
   }
 }
 

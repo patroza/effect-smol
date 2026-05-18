@@ -1605,17 +1605,8 @@ describe("Schema", () => {
         b: Schema.String
       }).pipe(Schema.encodeKeys({ a: "c" }))
 
-      expect(schema).type.toBe<
-        Schema.decodeTo<
-          Schema.Struct<{
-            readonly a: Schema.FiniteFromString
-            readonly b: Schema.String
-          }>,
-          Schema.Struct<{
-            readonly c: Schema.toEncoded<Schema.FiniteFromString>
-            readonly b: Schema.toEncoded<Schema.String>
-          }>
-        >
+      expect(Schema.revealCodec(schema)).type.toBe<
+        Schema.Codec<{ readonly a: number; readonly b: string }, { readonly c: string; readonly b: string }>
       >()
     })
 
@@ -1624,15 +1615,38 @@ describe("Schema", () => {
         a: Schema.String
       }).pipe(Schema.encodeKeys({ a: "c", b: "d" }))
 
-      expect(schema).type.toBe<
-        Schema.decodeTo<
-          Schema.Struct<{
-            readonly a: Schema.String
-          }>,
-          Schema.Struct<{
-            readonly c: Schema.toEncoded<Schema.String>
-          }>
-        >
+      expect(Schema.revealCodec(schema)).type.toBe<
+        Schema.Codec<{ readonly a: string }, { readonly c: string }>
+      >()
+    })
+
+    it("should expose mapped fields for reuse", () => {
+      const schema = Schema.Struct({
+        a: Schema.String
+      }).pipe(Schema.encodeKeys({ a: "c" }))
+      const reused = Schema.Struct({
+        ...schema.fields,
+        b: Schema.Number
+      })
+      const mapped = schema.mapFields((fields) => ({
+        ...fields,
+        b: Schema.Number
+      }))
+
+      expect(schema.fields).type.toBe<{
+        readonly a: Schema.encodedKey<Schema.String, "c">
+      }>()
+      expect(reused).type.toBe<
+        Schema.Struct<{
+          readonly a: Schema.encodedKey<Schema.String, "c">
+          readonly b: Schema.Number
+        }>
+      >()
+      expect(mapped).type.toBe<
+        Schema.Struct<{
+          readonly a: Schema.encodedKey<Schema.String, "c">
+          readonly b: Schema.Number
+        }>
       >()
     })
   })

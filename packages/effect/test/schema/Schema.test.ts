@@ -7347,6 +7347,40 @@ Expected a value with a size of at most 2, got Map([["a",1],["b",NaN],["c",3]])`
       const encoding = asserts.encoding()
       await encoding.succeed(new A({ a: 1, b: "b" }), { c: "1", b: "b" })
     })
+
+    it("preserves encodeKeys mappings when spreading fields", async () => {
+      const shared = Schema.Struct({
+        a: Schema.FiniteFromString
+      }).pipe(Schema.encodeKeys({ a: "mapped_a" }))
+      const schema = Schema.Struct({
+        ...shared.fields,
+        b: Schema.String
+      })
+      const asserts = new TestSchema.Asserts(schema)
+
+      const decoding = asserts.decoding()
+      await decoding.succeed({ mapped_a: "1", b: "b" }, { a: 1, b: "b" })
+
+      const encoding = asserts.encoding()
+      await encoding.succeed({ a: 1, b: "b" }, { mapped_a: "1", b: "b" })
+    })
+
+    it("preserves encodeKeys mappings through mapFields", async () => {
+      const schema = Schema.Struct({
+        a: Schema.FiniteFromString,
+        b: Schema.String
+      }).pipe(Schema.encodeKeys({ a: "mapped_a" })).mapFields((fields) => ({
+        ...fields,
+        c: Schema.Boolean
+      }))
+      const asserts = new TestSchema.Asserts(schema)
+
+      const decoding = asserts.decoding()
+      await decoding.succeed({ mapped_a: "1", b: "b", c: true }, { a: 1, b: "b", c: true })
+
+      const encoding = asserts.encoding()
+      await encoding.succeed({ a: 1, b: "b", c: true }, { mapped_a: "1", b: "b", c: true })
+    })
   })
 
   describe("Schema.makeFilter", () => {
