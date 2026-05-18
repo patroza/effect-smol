@@ -2620,21 +2620,27 @@ function decorateStruct<const Fields extends Struct.Fields, S extends Top>(schem
 
 function makeEncodedFields<
   Fields extends Struct.Fields,
-  M extends { readonly [K in keyof Fields]?: PropertyKey }
+  M extends { readonly [K in keyof Fields]?: PropertyKey },
+  R extends { readonly [K in keyof Fields]?: PropertyKey }
 >(
   fields: Fields,
-  mapping: M
+  mapping: M,
+  previousRuntimeMapping: R
 ): {
   readonly fields: { readonly [K in keyof Fields as K extends keyof M ? M[K] extends PropertyKey ? M[K] : K : K]: toEncoded<Fields[K]> }
-  readonly reverseMapping: { readonly [K in keyof Fields as K extends keyof M ? M[K] extends PropertyKey ? M[K] : never : never]: K }
+  readonly decodeMapping: { readonly [K in keyof Fields as K extends keyof M ? M[K] extends PropertyKey ? M[K] : never : never]: PropertyKey }
+  readonly encodeMapping: { readonly [K in keyof Fields as K extends keyof M ? K : never]: PropertyKey }
 } {
   const encodedFields: any = {}
-  const reverseMapping: any = {}
+  const decodeMapping: any = {}
+  const encodeMapping: any = {}
   const seen = new Map<PropertyKey, PropertyKey>()
   const keyToDisplay = (key: PropertyKey) =>
     typeof key === "string" ? globalThis.JSON.stringify(key) : globalThis.String(key)
   for (const key of Reflect.ownKeys(fields) as Array<keyof Fields & PropertyKey>) {
-    const encodedKey = Object.hasOwn(mapping, key) ? mapping[key]! : key
+    const fieldEncodedKey = fields[key].ast.context?.annotations?.encodedKey
+    const previousRuntimeEncodedKey = Object.hasOwn(previousRuntimeMapping, key) ? previousRuntimeMapping[key]! : key
+    const encodedKey = Object.hasOwn(mapping, key) ? mapping[key]! : fieldEncodedKey ?? key
     const previous = seen.get(encodedKey)
     if (previous !== undefined && previous !== key) {
       throw new globalThis.Error(
@@ -2652,11 +2658,12 @@ function makeEncodedFields<
       encoded = annotateKey<typeof encoded>({ encodedKey: undefined })(encoded)
     }
     encodedFields[encodedKey] = encoded
-    if (encodedKey !== key) {
-      reverseMapping[encodedKey] = key
+    if (encodedKey !== previousRuntimeEncodedKey) {
+      decodeMapping[encodedKey] = previousRuntimeEncodedKey
+      encodeMapping[previousRuntimeEncodedKey] = encodedKey
     }
   }
-  return { fields: encodedFields, reverseMapping } as any
+  return { fields: encodedFields, decodeMapping, encodeMapping } as any
 }
 
 type WithEncodedKeyMapping<
@@ -2668,6 +2675,20 @@ type WithEncodedKeyMapping<
       : Fields[K]
   }>
 >
+
+type ResolveEncodedFieldKey<Field, Fallback extends PropertyKey> = Field extends
+  { readonly "~encoded.key": infer Key extends PropertyKey } ? Key
+  : Fallback
+
+type EncodedFieldsWithKeyMapping<
+  Fields extends Struct.Fields,
+  M extends { readonly [K in keyof Fields]?: PropertyKey }
+> = {
+  readonly [
+    K in keyof Fields as K extends keyof M ? M[K] extends PropertyKey ? M[K] : ResolveEncodedFieldKey<Fields[K], K & PropertyKey>
+      : ResolveEncodedFieldKey<Fields[K], K & PropertyKey>
+  ]: toEncoded<Fields[K]>
+}
 
 function applyEncodedKeyMapping<
   Fields extends Struct.Fields,
@@ -2689,6 +2710,24 @@ function getFieldEncodedKeyMapping<Fields extends Struct.Fields>(fields: Fields)
   for (const key of Reflect.ownKeys(fields) as Array<keyof Fields & PropertyKey>) {
     const encodedKey = fields[key].ast.context?.annotations?.encodedKey
     if (encodedKey !== undefined) {
+      mapping[key] = encodedKey
+    }
+  }
+  return mapping
+}
+
+function getPreviousRuntimeEncodedKeyMapping<S extends Top & { readonly fields: Struct.Fields }>(schema: S): {
+  readonly [K in keyof S["fields"]]?: PropertyKey
+} {
+  const from = "from" in schema ? schema.from : undefined
+  if (from === undefined || typeof from !== "object" || from === null || !("fields" in from)) {
+    return {}
+  }
+  const fromFields = (from as { readonly fields: Struct.Fields }).fields
+  const mapping: any = {}
+  for (const key of Reflect.ownKeys(schema.fields) as Array<keyof S["fields"] & PropertyKey>) {
+    const encodedKey = schema.fields[key].ast.context?.annotations?.encodedKey
+    if (encodedKey !== undefined && Object.hasOwn(fromFields, encodedKey)) {
       mapping[key] = encodedKey
     }
   }
@@ -2791,13 +2830,7 @@ export interface encodeKeys<
 > extends
   decodeTo<
     S,
-    Struct<
-      {
-        [
-          K in keyof S["fields"] as K extends keyof M ? M[K] extends PropertyKey ? M[K] : K : K
-        ]: toEncoded<S["fields"][K]>
-      }
-    >
+    Struct<EncodedFieldsWithKeyMapping<S["fields"], M>>
   >
 {
   readonly fields: WithEncodedKeyMapping<S["fields"], M>
@@ -2844,14 +2877,15 @@ export function encodeKeys<
   const M extends { readonly [K in keyof S["fields"]]?: PropertyKey }
 >(mapping: M) {
   return function(self: S): encodeKeys<S, M> {
-    const { fields, reverseMapping } = makeEncodedFields(self.fields, mapping)
+    const previousRuntimeMapping = getPreviousRuntimeEncodedKeyMapping(self)
+    const { fields, decodeMapping, encodeMapping } = makeEncodedFields(self.fields, mapping, previousRuntimeMapping)
     const mappedFields = applyEncodedKeyMapping(self.fields, mapping)
     return decorateStruct(
       Struct(fields).pipe(decodeTo(
         self,
         Transformation.transform<any, any>({
-          decode: Struct_.renameKeys(reverseMapping),
-          encode: Struct_.renameKeys(mapping)
+          decode: Struct_.renameKeys(decodeMapping),
+          encode: Struct_.renameKeys(encodeMapping)
         })
       )),
       mappedFields

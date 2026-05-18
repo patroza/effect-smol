@@ -7381,6 +7381,49 @@ Expected a value with a size of at most 2, got Map([["a",1],["b",NaN],["c",3]])`
       const encoding = asserts.encoding()
       await encoding.succeed({ a: 1, b: "b", c: true }, { mapped_a: "1", b: "b", c: true })
     })
+
+    it("composes repeated encodeKeys mappings", async () => {
+      const schema = Schema.Struct({
+        a: Schema.FiniteFromString,
+        b: Schema.String
+      }).pipe(Schema.encodeKeys({ a: "mapped_a" }), Schema.encodeKeys({ b: "mapped_b" }))
+      const asserts = new TestSchema.Asserts(schema)
+
+      const decoding = asserts.decoding()
+      await decoding.succeed({ mapped_a: "1", mapped_b: "b" }, { a: 1, b: "b" })
+
+      const encoding = asserts.encoding()
+      await encoding.succeed({ a: 1, b: "b" }, { mapped_a: "1", mapped_b: "b" })
+    })
+
+    it("preserves repeated encodeKeys mappings when reusing fields", async () => {
+      const shared = Schema.Struct({
+        a: Schema.FiniteFromString,
+        b: Schema.String
+      }).pipe(Schema.encodeKeys({ a: "mapped_a" }), Schema.encodeKeys({ b: "mapped_b" }))
+      const spread = Schema.Struct({
+        ...shared.fields,
+        c: Schema.Boolean
+      })
+      const mapped = shared.mapFields((fields) => ({
+        ...fields,
+        c: Schema.Boolean
+      }))
+
+      const spreadAsserts = new TestSchema.Asserts(spread)
+      const spreadDecoding = spreadAsserts.decoding()
+      await spreadDecoding.succeed({ mapped_a: "1", mapped_b: "b", c: true }, { a: 1, b: "b", c: true })
+
+      const spreadEncoding = spreadAsserts.encoding()
+      await spreadEncoding.succeed({ a: 1, b: "b", c: true }, { mapped_a: "1", mapped_b: "b", c: true })
+
+      const mappedAsserts = new TestSchema.Asserts(mapped)
+      const mappedDecoding = mappedAsserts.decoding()
+      await mappedDecoding.succeed({ mapped_a: "1", mapped_b: "b", c: true }, { a: 1, b: "b", c: true })
+
+      const mappedEncoding = mappedAsserts.encoding()
+      await mappedEncoding.succeed({ a: 1, b: "b", c: true }, { mapped_a: "1", mapped_b: "b", c: true })
+    })
   })
 
   describe("Schema.makeFilter", () => {

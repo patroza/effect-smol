@@ -1605,9 +1605,10 @@ describe("Schema", () => {
         b: Schema.String
       }).pipe(Schema.encodeKeys({ a: "c" }))
 
-      expect(Schema.revealCodec(schema)).type.toBe<
-        Schema.Codec<{ readonly a: number; readonly b: string }, { readonly c: string; readonly b: string }>
-      >()
+      expect(schema.fields).type.toBe<{
+        readonly a: Schema.encodedKey<Schema.FiniteFromString, "c">
+        readonly b: Schema.String
+      }>()
     })
 
     it("should ignore encoded key mappings for missing decoded fields", () => {
@@ -1615,9 +1616,9 @@ describe("Schema", () => {
         a: Schema.String
       }).pipe(Schema.encodeKeys({ a: "c", b: "d" }))
 
-      expect(Schema.revealCodec(schema)).type.toBe<
-        Schema.Codec<{ readonly a: string }, { readonly c: string }>
-      >()
+      expect(schema.fields).type.toBe<{
+        readonly a: Schema.encodedKey<Schema.String, "c">
+      }>()
     })
 
     it("should expose mapped fields for reuse", () => {
@@ -1646,6 +1647,43 @@ describe("Schema", () => {
         Schema.Struct<{
           readonly a: Schema.encodedKey<Schema.String, "c">
           readonly b: Schema.Number
+        }>
+      >()
+    })
+
+    it("should preserve previous mappings across repeated encodeKeys", () => {
+      const schema = Schema.Struct({
+        a: Schema.FiniteFromString,
+        b: Schema.String
+      }).pipe(Schema.encodeKeys({ a: "c" }), Schema.encodeKeys({ b: "d" }))
+      const reused = Schema.Struct({
+        ...schema.fields,
+        e: Schema.Boolean
+      })
+      const mapped = schema.mapFields((fields) => ({
+        ...fields,
+        e: Schema.Boolean
+      }))
+
+      expect({} as Schema.Struct.Encoded<typeof schema.fields>).type.toBe<
+        { readonly c: string; readonly d: string }
+      >()
+      expect(schema.fields).type.toBe<{
+        readonly a: Schema.encodedKey<Schema.FiniteFromString, "c">
+        readonly b: Schema.encodedKey<Schema.String, "d">
+      }>()
+      expect(reused).type.toBe<
+        Schema.Struct<{
+          readonly a: Schema.encodedKey<Schema.FiniteFromString, "c">
+          readonly b: Schema.encodedKey<Schema.String, "d">
+          readonly e: Schema.Boolean
+        }>
+      >()
+      expect(mapped).type.toBe<
+        Schema.Struct<{
+          readonly a: Schema.encodedKey<Schema.FiniteFromString, "c">
+          readonly b: Schema.encodedKey<Schema.String, "d">
+          readonly e: Schema.Boolean
         }>
       >()
     })
