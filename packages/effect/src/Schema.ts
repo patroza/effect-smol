@@ -2640,7 +2640,7 @@ function makeEncodedFields<
   for (const key of Reflect.ownKeys(fields) as Array<keyof Fields & PropertyKey>) {
     const fieldAnnotatedEncodedKey = fields[key].ast.context?.annotations?.encodedKey
     const previousRuntimeEncodedKey = Object.hasOwn(previousRuntimeMapping, key) ? previousRuntimeMapping[key]! : key
-    const encodedKey = Object.hasOwn(mapping, key) ? mapping[key]! : fieldAnnotatedEncodedKey ?? key
+    const encodedKey = resolveNextEncodedKey(key, fieldAnnotatedEncodedKey, mapping)
     const previous = seen.get(encodedKey)
     if (previous !== undefined && previous !== key) {
       throw new globalThis.Error(
@@ -2690,6 +2690,14 @@ type EncodedFieldsWithKeyMapping<
   ]: toEncoded<Fields[K]>
 }
 
+function resolveNextEncodedKey(
+  decodedKey: PropertyKey,
+  fieldAnnotatedEncodedKey: PropertyKey | undefined,
+  mapping: { readonly [x: PropertyKey]: PropertyKey | undefined }
+) {
+  return Object.hasOwn(mapping, decodedKey) ? mapping[decodedKey]! : fieldAnnotatedEncodedKey ?? decodedKey
+}
+
 function applyEncodedKeyMapping<
   Fields extends Struct.Fields,
   M extends { readonly [K in keyof Fields]?: PropertyKey }
@@ -2716,7 +2724,7 @@ function getFieldEncodedKeyMapping<Fields extends Struct.Fields>(fields: Fields)
   return mapping
 }
 
-function getFromSchemaEncodedKeyMapping<S extends Top & { readonly fields: Struct.Fields }>(schema: S): {
+function extractPreviousEncodedKeyMapping<S extends Top & { readonly fields: Struct.Fields }>(schema: S): {
   readonly [K in keyof S["fields"]]?: PropertyKey
 } {
   const from = "from" in schema ? schema.from : undefined
@@ -2877,7 +2885,7 @@ export function encodeKeys<
   const M extends { readonly [K in keyof S["fields"]]?: PropertyKey }
 >(mapping: M) {
   return function(self: S): encodeKeys<S, M> {
-    const previousRuntimeMapping = getFromSchemaEncodedKeyMapping(self)
+    const previousRuntimeMapping = extractPreviousEncodedKeyMapping(self)
     const { fields, decodeMapping, encodeMapping } = makeEncodedFields(self.fields, mapping, previousRuntimeMapping)
     const mappedFields = applyEncodedKeyMapping(self.fields, mapping)
     return decorateStruct(
