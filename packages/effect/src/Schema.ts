@@ -2639,8 +2639,8 @@ function makeEncodedFields<
     typeof key === "string" ? globalThis.JSON.stringify(key) : globalThis.String(key)
   for (const key of Reflect.ownKeys(fields) as Array<keyof Fields & PropertyKey>) {
     const fieldAnnotatedEncodedKey = fields[key].ast.context?.annotations?.encodedKey
-    const previousRuntimeEncodedKey = Object.hasOwn(previousRuntimeMapping, key) ? previousRuntimeMapping[key]! : key
-    const encodedKey = resolveNextEncodedKey(key, fieldAnnotatedEncodedKey, mapping)
+    const previousTransformEncodedKey = Object.hasOwn(previousRuntimeMapping, key) ? previousRuntimeMapping[key]! : key
+    const encodedKey = resolveEffectiveEncodedKey(key, fieldAnnotatedEncodedKey, mapping)
     const previous = seen.get(encodedKey)
     if (previous !== undefined && previous !== key) {
       throw new globalThis.Error(
@@ -2658,9 +2658,9 @@ function makeEncodedFields<
       encoded = annotateKey<typeof encoded>({ encodedKey: undefined })(encoded)
     }
     encodedFields[encodedKey] = encoded
-    if (encodedKey !== previousRuntimeEncodedKey) {
-      decodeMapping[encodedKey] = previousRuntimeEncodedKey
-      encodeMapping[previousRuntimeEncodedKey] = encodedKey
+    if (encodedKey !== previousTransformEncodedKey) {
+      decodeMapping[encodedKey] = previousTransformEncodedKey
+      encodeMapping[previousTransformEncodedKey] = encodedKey
     }
   }
   return { fields: encodedFields, decodeMapping, encodeMapping } as any
@@ -2690,7 +2690,7 @@ type EncodedFieldsWithKeyMapping<
   ]: toEncoded<Fields[K]>
 }
 
-function resolveNextEncodedKey(
+function resolveEffectiveEncodedKey(
   decodedKey: PropertyKey,
   fieldAnnotatedEncodedKey: PropertyKey | undefined,
   mapping: { readonly [x: PropertyKey]: PropertyKey | undefined }
@@ -2724,6 +2724,14 @@ function getFieldEncodedKeyMapping<Fields extends Struct.Fields>(fields: Fields)
   return mapping
 }
 
+/**
+ * Extracts the encoded-key mapping already materialized by the previous
+ * transformation layer, if this schema was itself built through `decodeTo`.
+ *
+ * We only retain an annotated encoded key when that key is present in the
+ * previous `from.fields`, which confirms the prior transformation actually
+ * encoded through that intermediate key space.
+ */
 function extractPreviousEncodedKeyMapping<S extends Top & { readonly fields: Struct.Fields }>(schema: S): {
   readonly [K in keyof S["fields"]]?: PropertyKey
 } {
