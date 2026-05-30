@@ -22,6 +22,11 @@ export * as NodeClusterHttp from "./NodeClusterHttp.ts"
 /**
  * @since 4.0.0
  */
+export * as NodeClusterServiceBus from "./NodeClusterServiceBus.ts"
+
+/**
+ * @since 4.0.0
+ */
 export * as NodeClusterSocket from "./NodeClusterSocket.ts"
 
 /**
