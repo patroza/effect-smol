@@ -35,7 +35,6 @@
     "@changesets/cli": "^2.31.0",
     "@effect/ai-docgen": "workspace:^",
     "@effect/bundle": "workspace:^",
-    "@effect/docgen": "https://pkg.pr.new/Effect-TS/docgen/@effect/docgen@e57e5f5",
     "@effect/jsdocs": "workspace:^",
     "@effect/language-service": "^0.85.1",
     "@effect/oxc": "workspace:^",
