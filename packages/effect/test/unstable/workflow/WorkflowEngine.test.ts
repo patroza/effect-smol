@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Option, Schema } from "effect"
-import { Workflow, WorkflowEngine } from "effect/unstable/workflow"
+import { Duration, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Activity, DurableClock, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 
 describe("WorkflowEngine", () => {
   const IncrementWorkflow = Workflow.make("WorkflowEngine/IncrementWorkflow", {
@@ -57,4 +57,68 @@ describe("WorkflowEngine", () => {
         Layer.provideMerge(WorkflowEngine.layerMemory)
       ))
     ))
+})
+
+// Reproduction of https://github.com/ivan-puzyrny/effect-workflow-parallel-bug-repro
+//
+// A parent workflow uses Activity.make to wrap an Effect.forEach that fans out
+// child workflows concurrently. Each child durably suspends via DurableClock.sleep
+// (inMemoryThreshold < duration forces the durable path). The parent should
+// suspend correctly while children are sleeping and complete once they wake up —
+// it must NOT hang.
+describe("parallel child workflow fan-out (repro)", () => {
+  const ChildWorkflow = Workflow.make("ParallelRepro/ChildWorkflow", {
+    payload: { id: Schema.Number },
+    success: Schema.Void,
+    idempotencyKey: ({ id }) => String(id)
+  })
+
+  // Each child uses a very short durable sleep (50 ms real time).
+  // Duration.zero threshold forces even tiny durations down the durable path,
+  // which is the condition that triggers the bug.
+  const ChildWorkflowLayer = ChildWorkflow.toLayer(({ id }) =>
+    DurableClock.sleep({
+      name: `sleep-${id}`,
+      duration: "50 millis",
+      inMemoryThreshold: Duration.zero
+    })
+  )
+
+  const ParentWorkflow = Workflow.make("ParallelRepro/ParentWorkflow", {
+    payload: {},
+    success: Schema.Array(Schema.Void),
+    idempotencyKey: () => "parent"
+  })
+
+  // The fan-out: Activity wrapping Effect.forEach with concurrency > 1.
+  // All three required conditions from the bug report are present:
+  //   1. Activity.make wrapping the fan-out
+  //   2. Effect.forEach with concurrency: 3 inside that activity
+  //   3. Each child durably suspends (inMemoryThreshold < duration)
+  const fanoutActivity = Activity.make({
+    name: "ParallelRepro/fanout",
+    success: Schema.Array(Schema.Void),
+    execute: Effect.forEach([1, 2, 3], (id) => ChildWorkflow.execute({ id }), { concurrency: 3 })
+  })
+
+  const ParentWorkflowLayer = ParentWorkflow.toLayer(() => fanoutActivity)
+
+  const TestLayer = ParentWorkflowLayer.pipe(
+    Layer.provideMerge(ChildWorkflowLayer),
+    Layer.provideMerge(WorkflowEngine.layerMemory)
+  )
+
+  it.effect("parent suspends (does not hang) when Activity fans out concurrent children that durably suspend", () =>
+    Effect.gen(function*() {
+      // Launch parent — it will fan out 3 children, each of which durably
+      // suspends for 50 ms.  If the bug is present the parent hangs forever.
+      // We join with a 5-second timeout to detect the hang.
+      const result = yield* ParentWorkflow.execute({}).pipe(
+        Effect.timeout("5 seconds")
+      )
+
+      assert(Option.isSome(result), "parent should complete within timeout (bug: parent hangs when children durably suspend concurrently)")
+      assert.deepStrictEqual(result.value, [undefined, undefined, undefined])
+    }).pipe(Effect.provide(TestLayer))
+  )
 })

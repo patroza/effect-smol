@@ -732,7 +732,7 @@ export const layerMemory: Layer.Layer<WorkflowEngine> = Layer.effect(WorkflowEng
         const id = `${instance.executionId}/${deferred.name}`
         return Option.fromNullishOr(deferredResults.get(id))
       }),
-      deferredDone: (options) =>
+      deferredDone: (_deferred, options) =>
         Effect.suspend(() => {
           const id = `${options.executionId}/${options.deferredName}`
           if (deferredResults.has(id)) return Effect.void
