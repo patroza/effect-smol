@@ -57,6 +57,10 @@ describe("Machine", () => {
     readonly doneMessage: string
   }>()("test/Machine/DoneRequirement") {}
 
+  class Clock extends Context.Service<Clock, {
+    readonly now: () => number
+  }>()("test/Machine/Clock") {}
+
   const UpStates = Machine.defineStates({
     up: {
       schema: Up,
@@ -219,6 +223,46 @@ describe("Machine", () => {
     expect(Machine.plan).type.not.toBeCallableWith(machine, new Down({}), new SignIn({ userId: "user-1" }))
     expect(Machine.enabled).type.not.toBeCallableWith(machine, new Down({}))
     expect(Machine.isFinal).type.not.toBeCallableWith(machine, new Down({}))
+  })
+
+  it("plan scopes event handler requirements to the selected state and event", () => {
+    class Idle extends Schema.TaggedClass<Idle>("Idle")("Idle", {}) {}
+    class Running extends Schema.TaggedClass<Running>("Running")("Running", {
+      startedAt: Schema.Finite
+    }) {}
+    class Done extends Schema.TaggedClass<Done>("Done")("Done", {}) {}
+    class Start extends Schema.TaggedClass<Start>("Start")("Start", {}) {}
+    class Stop extends Schema.TaggedClass<Stop>("Stop")("Stop", {}) {}
+
+    const States = Machine.defineStates({ idle: Idle, running: Running, done: Done })
+    const machine = Machine
+      .make({
+        states: States.states,
+        events: [Start, Stop],
+        initial: () => States.initial.idle(new Idle({}))
+      })
+      .handle({
+        idle: {
+          on: {
+            Start: ({ target }) =>
+              Effect.gen(function*() {
+                const clock = yield* Clock
+                return target.full.running(new Running({ startedAt: clock.now() }))
+              })
+          }
+        },
+        running: {
+          on: {
+            Stop: ({ target }) => target.full.done(new Done({}))
+          }
+        }
+      })
+
+    const planStart = Machine.plan(machine, States.initial.idle(new Idle({})), new Start({}))
+    const planStop = Machine.plan(machine, States.initial.running(new Running({ startedAt: 0 })), new Stop({}))
+
+    expect<Effect.Services<typeof planStart>>().type.toBe<Clock>()
+    expect<Effect.Services<typeof planStop>>().type.toBe<never>()
   })
 
   it("handlers reject raw decoded state returns", () => {

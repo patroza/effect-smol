@@ -95,7 +95,9 @@ export interface Machine<
   FinalStates extends Machine.StateIdentifier<States> = never,
   Output = never,
   Emits extends ReadonlyArray<Machine.TaggedSchema> = any,
-  OutputStates extends Machine.StateIdentifier<States> = never
+  OutputStates extends Machine.StateIdentifier<States> = never,
+  LifecycleR = never,
+  HandlerConfig = {}
 > extends Pipeable {
   readonly [TypeId]: TypeId
   readonly states: States
@@ -125,7 +127,9 @@ export interface Machine<
     InitialR,
     FinalStates,
     Output,
-    OutputStates
+    OutputStates,
+    LifecycleR,
+    HandlerConfig
   >
 
   /** @internal */
@@ -783,7 +787,7 @@ export declare namespace Machine {
    * @category models
    * @since 4.0.0
    */
-  export type Any = Machine<any, any, any, any, any, any, any, any, any, any, any>
+  export type Any = Machine<any, any, any, any, any, any, any, any, any, any, any, any, any>
 
   /**
    * A schema whose decoded value contains a `_tag` discriminator.
@@ -1760,6 +1764,57 @@ export declare namespace Machine {
     | Effect.Services<StateActionReturn<Config, "exit">>
     | InvokeRequirements<Config>
 
+  type SnapshotPaths<Snapshot> = Snapshot extends { readonly path: infer Path extends string } ? Path
+    : never
+
+  type ConfigAtPath<Config, Path extends string> = Config extends unknown ?
+    Path extends `${infer Head}.${infer Rest}`
+      ? Head extends keyof Config ? Config[Head] extends { readonly states?: infer Children } ? ConfigAtPath<
+            NonNullable<Children>,
+            Rest
+          >
+        : never
+      : never
+    : Path extends keyof Config ? HandlerConfigPart<Config[Path]>
+    : never
+    : never
+
+  type EventTagOf<Event> = Event extends { readonly _tag: infer Tag extends PropertyKey } ? Tag : never
+
+  type EventTransitionAtConfig<Config, Event> = Config extends { readonly on?: infer On }
+    ? EventTagOf<Event> extends keyof NonNullable<On> ? NonNullable<NonNullable<On>[EventTagOf<Event>]> : never
+    : never
+
+  type EventTransitionServicesForPath<Config, Path extends string, Event> = Effect.Services<
+    EventTransitionReturn<EventTransitionAtConfig<ConfigAtPath<Config, Path>, Event>>
+  >
+
+  type LifecycleServices<Config> = Config extends unknown ? Config extends object ? {
+        readonly [Key in keyof Config]:
+          | Effect.Services<AlwaysReturn<HandlerConfigPart<Config[Key]>>>
+          | Effect.Services<DoneReturn<HandlerConfigPart<Config[Key]>>>
+          | Effect.Services<StateActionReturn<HandlerConfigPart<Config[Key]>, "entry">>
+          | Effect.Services<StateActionReturn<HandlerConfigPart<Config[Key]>, "exit">>
+          | (Config[Key] extends { readonly states?: infer Children } ? LifecycleServices<NonNullable<Children>>
+            : never)
+      }[keyof Config]
+    : never
+    : never
+
+  /**
+   * Service requirements needed to plan a concrete state/event pair.
+   *
+   * Event handler requirements are selected from the planned snapshot path and
+   * event tag. Lifecycle requirements are included because a macrostep can run entry,
+   * exit, always, and completion handlers after the event transition.
+   *
+   * @category utility types
+   * @since 4.0.0
+   */
+  export type PlanServices<Config, LifecycleR, Snapshot, Event> =
+    | EventTransitionServicesForPath<Config, Extract<SnapshotPaths<Snapshot>, string>, Event>
+    | LifecycleR
+
   /**
    * Resolves the tag of a state config when it is final.
    *
@@ -2366,6 +2421,8 @@ export declare namespace Machine {
     FinalStates extends StateIdentifier<AllStates>,
     Output,
     OutputStates extends StateIdentifier<AllStates>,
+    PreviousLifecycleR,
+    PreviousConfig,
     Config
   > = Machine<
     AllStates,
@@ -2383,7 +2440,9 @@ export declare namespace Machine {
     FinalStates | Extract<HandlerTreeFinalStates<AllStates, AllStates, "", Config>, StateIdentifier<AllStates>>,
     Output | HandlerTreeOutput<AllStates, AllStates, "", Config>,
     Emits,
-    OutputStates | Extract<HandlerTreeOutputStates<AllStates, AllStates, "", Config>, StateIdentifier<AllStates>>
+    OutputStates | Extract<HandlerTreeOutputStates<AllStates, AllStates, "", Config>, StateIdentifier<AllStates>>,
+    PreviousLifecycleR | LifecycleServices<Config>,
+    PreviousConfig | Config
   >
 
   /**
@@ -2404,7 +2463,9 @@ export declare namespace Machine {
     InitialR,
     FinalStates extends StateIdentifier<States>,
     Output,
-    OutputStates extends StateIdentifier<States>
+    OutputStates extends StateIdentifier<States>,
+    LifecycleR,
+    HandlerConfig
   > {
     <const Config extends HandlerTree<States, States, Events, Emits, E, R, "">>(
       config:
@@ -2435,6 +2496,8 @@ export declare namespace Machine {
       FinalStates,
       Output,
       OutputStates,
+      LifecycleR,
+      HandlerConfig,
       Config
     >
   }
@@ -3075,10 +3138,69 @@ export const enabled = <
 /**
  * Plans the next state snapshot without running deferred actions.
  *
+ * Service requirements from event handlers are scoped to the concrete
+ * state/event pair being planned. Lifecycle handlers that may run while the
+ * macrostep settles (entry, exit, always, onDone) still contribute their
+ * requirements to the plan.
+ *
  * @category combinators
  * @since 4.0.0
  */
-export const plan = internalRuntime.plan
+export const plan: <
+  const States extends Machine.StateSchemas,
+  const Events extends ReadonlyArray<Machine.TaggedSchema>,
+  const Emits extends ReadonlyArray<Machine.TaggedSchema> = any,
+  const Input extends Schema.Top = typeof Schema.Void,
+  UnhandledStates extends Machine.StateIdentifier<States> = Machine.StateIdentifier<States>,
+  E = never,
+  R = never,
+  InitialE = never,
+  InitialR = never,
+  FinalStates extends Machine.StateIdentifier<States> = never,
+  Output = never,
+  OutputStates extends Machine.StateIdentifier<States> = never,
+  LifecycleR = never,
+  HandlerConfig = {},
+  State extends Machine.Snapshot<States> = Machine.Snapshot<States>,
+  Event extends Machine.EventOf<Events> = Machine.EventOf<Events>
+>(
+  machine: Machine<
+    States,
+    Events,
+    Input,
+    UnhandledStates,
+    E,
+    R,
+    InitialE,
+    InitialR,
+    FinalStates,
+    Output,
+    Emits,
+    OutputStates,
+    LifecycleR,
+    HandlerConfig
+  >,
+  state: State,
+  event: Event
+) => Effect.Effect<
+  internalRuntime.MacrostepPlan<
+    Machine.Snapshot<States>,
+    Machine.EventOf<Events>,
+    E,
+    ExcludeCompatibleRuntime<
+      Machine.PlanServices<HandlerConfig, LifecycleR, State, Event>,
+      Machine.EventOf<Events>,
+      Machine.EmitOf<Emits>
+    >,
+    Output
+  >,
+  E | InfiniteTransitionError | MachineSchemaDecodeError | UnhandledEventError,
+  ExcludeCompatibleRuntime<
+    Machine.PlanServices<HandlerConfig, LifecycleR, State, Event>,
+    Machine.EventOf<Events>,
+    Machine.EmitOf<Emits>
+  >
+> = internalRuntime.plan as any
 
 /**
  * Defers an effectful action until the current machine step is planned.
