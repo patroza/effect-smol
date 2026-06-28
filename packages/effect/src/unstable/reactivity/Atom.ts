@@ -20,6 +20,7 @@ import * as Exit from "../../Exit.ts"
 import * as Fiber from "../../Fiber.ts"
 import type { LazyArg } from "../../Function.ts"
 import { constant, constTrue, constVoid, dual, pipe } from "../../Function.ts"
+import * as Hash from "../../Hash.ts"
 import type * as Inspectable from "../../Inspectable.ts"
 import { PipeInspectableProto } from "../../internal/core.ts"
 import * as Layer from "../../Layer.ts"
@@ -713,6 +714,43 @@ export interface RuntimeFactory {
   readonly withReactivity: (
     keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>
   ) => <A extends Atom<any>>(atom: A) => A
+
+  /**
+   * Invalidates the keys and resolves once every currently-tracked atom that was
+   * registered under them through {@link withReactivity} has settled.
+   */
+  readonly invalidateAndAwait: (
+    keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>
+  ) => Effect.Effect<void, never, AtomRegistry>
+}
+
+const reactivityKeyHash = (u: unknown): string | number => {
+  switch (typeof u) {
+    case "string":
+    case "number":
+    case "bigint":
+    case "boolean":
+      return String(u)
+    default:
+      return Hash.hash(u)
+  }
+}
+
+// Mirrors `Reactivity`'s internal key hashing so the per-factory atom tracking
+// agrees with how the same `keys` argument is matched on invalidation.
+const eachReactivityKeyHash = (
+  keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>,
+  f: (hash: string | number) => void
+): void => {
+  if (Array.isArray(keys)) {
+    for (let i = 0; i < keys.length; i++) f(reactivityKeyHash(keys[i]))
+    return
+  }
+  for (const key in keys) {
+    f(key)
+    const ids = (keys as ReadonlyRecord<string, ReadonlyArray<unknown>>)[key]
+    for (let i = 0; i < ids.length; i++) f(`${key}:${reactivityKeyHash(ids[i])}`)
+  }
 }
 
 /**
@@ -725,6 +763,21 @@ export const context: (options: {
   readonly memoMap: Layer.MemoMap
 }) => RuntimeFactory = (options) => {
   let globalLayer: Layer.Layer<any, any, AtomRegistry> = Reactivity.layer
+  // keyHash -> atoms registered under that key, kept while each atom is alive
+  // (mounted or cached within its TTL) so `invalidateAndAwait` can await its settle.
+  const trackedAtoms = new Map<string | number, Set<Atom<AsyncResult.AsyncResult<any, any>>>>()
+  const atomsForKeys = (
+    keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>
+  ): Array<Atom<AsyncResult.AsyncResult<any, any>>> => {
+    const atoms = new Set<Atom<AsyncResult.AsyncResult<any, any>>>()
+    eachReactivityKeyHash(keys, (hash) => {
+      const set = trackedAtoms.get(hash)
+      if (set !== undefined) {
+        for (const atom of set) atoms.add(atom)
+      }
+    })
+    return [...atoms]
+  }
   function factory<E, R>(
     create:
       | Layer.Layer<R, E, AtomRegistry | Reactivity.Reactivity>
@@ -770,9 +823,30 @@ export const context: (options: {
         get.addFinalizer(reactivity.registerUnsafe(keys, () => {
           get.refresh(atom)
         }))
+        eachReactivityKeyHash(keys, (hash) => {
+          let set = trackedAtoms.get(hash)
+          if (set === undefined) trackedAtoms.set(hash, set = new Set())
+          set.add(atom as any)
+          get.addFinalizer(() => {
+            set!.delete(atom as any)
+            if (set!.size === 0) trackedAtoms.delete(hash)
+          })
+        })
         get.subscribe(atom, (value) => get.setSelf(value))
         return get.once(atom)
       }, { initialValueTarget: atom }) as any as A
+  factory.invalidateAndAwait = (
+    keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>
+  ): Effect.Effect<void, never, AtomRegistry> =>
+    Effect.flatMap(getResult(reactivityAtom), (reactivity) => {
+      const atoms = atomsForKeys(keys)
+      reactivity.invalidateUnsafe(keys)
+      return atoms.length === 0 ? Effect.void : Effect.forEach(
+        atoms,
+        (atom) => Effect.exit(getResult(atom, { suspendOnWaiting: true })),
+        { discard: true, concurrency: "unbounded" }
+      )
+    })
   return factory
 }
 
@@ -807,6 +881,31 @@ export const runtime: RuntimeFactory = context({ memoMap: defaultMemoMap })
 export const withReactivity: (
   keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>
 ) => <A extends Atom<any>>(atom: A) => A = runtime.withReactivity
+
+/**
+ * Invalidates the keys in the default runtime and resolves once every tracked
+ * atom registered under them has settled.
+ *
+ * **When to use**
+ *
+ * Use when a mutation must wait for the queries it invalidates to refetch before
+ * continuing — e.g. to sequence an optimistic UI update after the affected
+ * reads are fresh. Unlike `Reactivity.invalidate`, which returns `void`, this
+ * resolves after the dependent atoms leave the `waiting` state.
+ *
+ * **Details**
+ *
+ * Atoms registered through {@link withReactivity} are awaited while alive (mounted
+ * or cached within their idle TTL), so cached-but-unmounted queries are awaited
+ * too. A failing query result does not reject — completion reports that the
+ * invalidation settled, not that each query succeeded.
+ *
+ * @category reactivity
+ * @since 4.0.0
+ */
+export const invalidateAndAwait: (
+  keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>
+) => Effect.Effect<void, never, AtomRegistry> = runtime.invalidateAndAwait
 
 // -----------------------------------------------------------------------------
 // constructors - stream
