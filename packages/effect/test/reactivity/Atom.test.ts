@@ -2216,6 +2216,50 @@ describe.sequential("Atom", () => {
       assert.strictEqual(r.get(atom), 11)
       assert.strictEqual(rebuilds, 2)
     })
+
+    it("invalidateAndAwait refetches and resolves after the atom settles", async () => {
+      const r = AtomRegistry.make()
+      let runs = 0
+      const atom = Atom.make(Effect.sync(() => ++runs).pipe(Effect.delay(50))).pipe(
+        Atom.withReactivity(["invalidate-and-await"]),
+        Atom.keepAlive
+      )
+      const unmount = r.mount(atom)
+      await vitest.advanceTimersByTimeAsync(60)
+      assert.strictEqual(runs, 1)
+      let result = r.get(atom)
+      assert(AsyncResult.isSuccess(result))
+      assert.strictEqual(result.value, 1)
+
+      const promise = Effect.runPromise(
+        Atom.invalidateAndAwait(["invalidate-and-await"]).pipe(
+          Effect.provideService(AtomRegistry.AtomRegistry, r)
+        )
+      )
+      // the refetch was triggered synchronously and is in-flight (delayed),
+      // so the atom is waiting while still exposing the previous value
+      await vitest.advanceTimersByTimeAsync(10)
+      assert(r.get(atom).waiting)
+
+      await vitest.advanceTimersByTimeAsync(60)
+      await promise
+      result = r.get(atom)
+      assert(AsyncResult.isSuccess(result))
+      assert.strictEqual(result.value, 2)
+      assert.strictEqual(runs, 2)
+      assert(!result.waiting)
+
+      unmount()
+    })
+
+    it("invalidateAndAwait resolves immediately when no atoms are tracked", async () => {
+      const r = AtomRegistry.make()
+      await Effect.runPromise(
+        Atom.invalidateAndAwait(["nothing-tracked"]).pipe(
+          Effect.provideService(AtomRegistry.AtomRegistry, r)
+        )
+      )
+    })
   })
 
   it("Atom.Interrupt", async () => {
