@@ -1700,6 +1700,143 @@ describe.sequential("Atom", () => {
     unmount()
   })
 
+  test(`swr revalidates on reconnect signal only when stale`, async () => {
+    const r = AtomRegistry.make()
+    const reconnectSignal = Atom.make(0)
+    let reconnects = 0
+    const emitReconnect = () => r.set(reconnectSignal, ++reconnects)
+    let runs = 0
+    const atom = Atom.make(Effect.sync(() => ++runs)).pipe(
+      Atom.swr({ staleTime: 1_000, revalidateOnReconnect: true, reconnectSignal })
+    )
+    const unmount = r.mount(atom)
+
+    let result = r.get(atom)
+    assert(AsyncResult.isSuccess(result))
+    assert.strictEqual(result.value, 1)
+    assert.strictEqual(runs, 1)
+
+    emitReconnect()
+    result = r.get(atom)
+    assert(AsyncResult.isSuccess(result))
+    assert.strictEqual(result.value, 1)
+    assert.strictEqual(runs, 1)
+
+    await vitest.advanceTimersByTimeAsync(1_001)
+    emitReconnect()
+    result = r.get(atom)
+    assert(AsyncResult.isSuccess(result))
+    assert.strictEqual(result.value, 2)
+    assert.strictEqual(runs, 2)
+
+    unmount()
+  })
+
+  test(`swr can force refresh on reconnect signal`, () => {
+    const r = AtomRegistry.make()
+    const reconnectSignal = Atom.make(0)
+    let reconnects = 0
+    const emitReconnect = () => r.set(reconnectSignal, ++reconnects)
+    let runs = 0
+    const atom = Atom.make(Effect.sync(() => ++runs)).pipe(
+      Atom.swr({ staleTime: 1_000, revalidateOnReconnect: "always", reconnectSignal })
+    )
+    const unmount = r.mount(atom)
+
+    assert.strictEqual(runs, 1)
+    emitReconnect()
+    const result = r.get(atom)
+    assert(AsyncResult.isSuccess(result))
+    assert.strictEqual(result.value, 2)
+    assert.strictEqual(runs, 2)
+
+    unmount()
+  })
+
+  test(`swr revalidates on focus and reconnect independently`, async () => {
+    const r = AtomRegistry.make()
+    const focusSignal = Atom.make(0)
+    const reconnectSignal = Atom.make(0)
+    let focus = 0
+    let reconnects = 0
+    const emitFocus = () => r.set(focusSignal, ++focus)
+    const emitReconnect = () => r.set(reconnectSignal, ++reconnects)
+    let runs = 0
+    const atom = Atom.make(Effect.sync(() => ++runs)).pipe(
+      Atom.swr({
+        staleTime: 1_000,
+        revalidateOnFocus: true,
+        revalidateOnReconnect: true,
+        focusSignal,
+        reconnectSignal
+      })
+    )
+    const unmount = r.mount(atom)
+    assert.strictEqual(runs, 1)
+
+    await vitest.advanceTimersByTimeAsync(1_001)
+    emitFocus()
+    assert.strictEqual(runs, 2)
+
+    await vitest.advanceTimersByTimeAsync(1_001)
+    emitReconnect()
+    assert.strictEqual(runs, 3)
+
+    unmount()
+  })
+
+  test(`combineSignals changes when any input changes`, () => {
+    const r = AtomRegistry.make()
+    const a = Atom.make(0)
+    const b = Atom.make(0)
+    const combined = Atom.combineSignals(a, b)
+    const seen: Array<number> = []
+    const unmount = r.subscribe(combined, (v) => seen.push(v), { immediate: true })
+
+    r.set(a, 1)
+    r.set(b, 5)
+    r.set(a, 2)
+
+    assert.deepStrictEqual(seen, [0, 1, 6, 7])
+    unmount()
+  })
+
+  test(`networkReconnectSignal is 0 without a browser`, () => {
+    const r = AtomRegistry.make()
+    assert.strictEqual(r.get(Atom.networkReconnectSignal), 0)
+  })
+
+  test(`replaceEqualDeep reuses unchanged sub-trees`, () => {
+    const prev = { a: { x: 1 }, b: [1, 2], c: 3 }
+    const next = { a: { x: 1 }, b: [1, 2], c: 4 }
+    const result = Atom.replaceEqualDeep(prev, next) as typeof prev
+    assert.notStrictEqual(result, prev)
+    assert.strictEqual(result.a, prev.a)
+    assert.strictEqual(result.b, prev.b)
+    assert.strictEqual(result.c, 4)
+    // identical input keeps the same reference
+    assert.strictEqual(Atom.replaceEqualDeep(prev, { ...prev, a: prev.a, b: prev.b }), prev)
+  })
+
+  test(`structuralShare keeps identity of unchanged rows across refreshes`, () => {
+    const r = AtomRegistry.make()
+    let runs = 0
+    const base = Atom.make(() => {
+      runs++
+      return AsyncResult.success([{ id: 1, name: "a" }, { id: 2, name: "b" }])
+    }).pipe(Atom.structuralShare, Atom.keepAlive)
+
+    const first = r.get(base)
+    assert(AsyncResult.isSuccess(first))
+    r.refresh(base)
+    const second = r.get(base)
+    assert(AsyncResult.isSuccess(second))
+    assert.strictEqual(runs, 2)
+    // whole value and each row keep identity because nothing changed
+    assert.strictEqual(second.value, first.value)
+    assert.strictEqual(second.value[0], first.value[0])
+  })
+
   test(`swr treats value as stale at exact staleTime boundary`, async () => {
     const r = AtomRegistry.make()
     const focusSignal = Atom.make(0)

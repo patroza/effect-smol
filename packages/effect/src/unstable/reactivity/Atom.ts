@@ -16,6 +16,7 @@ import * as Channel from "../../Channel.ts"
 import * as Context from "../../Context.ts"
 import * as Duration from "../../Duration.ts"
 import * as Effect from "../../Effect.ts"
+import * as Equal from "../../Equal.ts"
 import * as Exit from "../../Exit.ts"
 import * as Fiber from "../../Fiber.ts"
 import type { LazyArg } from "../../Function.ts"
@@ -1752,7 +1753,11 @@ export const withRefresh: {
  * fresh within `staleTime`. Manual `refresh` calls remain forceful and always
  * forward to the wrapped atom. Use `revalidateOnMount` to control whether stale data should trigger a
  * background refresh on first mount. Use `revalidateOnFocus` to control
- * focus behavior. `true` respects `staleTime` and `"always"` forces refetch.
+ * focus behavior and `revalidateOnReconnect` to control network-reconnect
+ * behavior; for both, `true` respects `staleTime` and `"always"` forces a
+ * refetch. When enabled, the focus trigger defaults to {@link windowFocusSignal}
+ * and the reconnect trigger to {@link networkReconnectSignal}; override them with
+ * `focusSignal` / `reconnectSignal` (e.g. in tests).
  *
  * @category combinators
  * @since 4.0.0
@@ -1763,7 +1768,9 @@ export const swr: {
       readonly staleTime: Duration.Input
       readonly revalidateOnMount?: boolean | undefined
       readonly revalidateOnFocus?: boolean | "always" | undefined
+      readonly revalidateOnReconnect?: boolean | "always" | undefined
       readonly focusSignal?: Atom<any> | undefined
+      readonly reconnectSignal?: Atom<any> | undefined
     }
   ): <R extends Atom<AsyncResult.AsyncResult<any, any>>>(self: R) => WithoutSerializable<R>
   <R extends Atom<AsyncResult.AsyncResult<any, any>>>(
@@ -1772,7 +1779,9 @@ export const swr: {
       readonly staleTime: Duration.Input
       readonly revalidateOnMount?: boolean | undefined
       readonly revalidateOnFocus?: boolean | "always" | undefined
+      readonly revalidateOnReconnect?: boolean | "always" | undefined
       readonly focusSignal?: Atom<any> | undefined
+      readonly reconnectSignal?: Atom<any> | undefined
     }
   ): WithoutSerializable<R>
 } = dual(
@@ -1783,7 +1792,9 @@ export const swr: {
       readonly staleTime: Duration.Input
       readonly revalidateOnMount?: boolean | undefined
       readonly revalidateOnFocus?: boolean | "always" | undefined
+      readonly revalidateOnReconnect?: boolean | "always" | undefined
       readonly focusSignal?: Atom<any> | undefined
+      readonly reconnectSignal?: Atom<any> | undefined
     }
   ): Atom<AsyncResult.AsyncResult<A, E>> => {
     const staleTime = Duration.toMillis(Duration.fromInputUnsafe(options.staleTime))
@@ -1792,11 +1803,15 @@ export const swr: {
       get.subscribe(self, (value) => {
         get.setSelf(value)
       })
-      if (options.revalidateOnFocus && options.focusSignal) {
-        get.once(options.focusSignal)
+      const subscribeRevalidate = (
+        mode: boolean | "always" | undefined,
+        signal: Atom<any> | undefined
+      ) => {
+        if (!mode || !signal) return
+        get.once(signal)
         get.subscribe(
-          options.focusSignal,
-          options.revalidateOnFocus === "always" ? () => get.refresh(self) : () => {
+          signal,
+          mode === "always" ? () => get.refresh(self) : () => {
             const current = get.once(self)
             if (shouldRevalidateSWR(current, staleTime)) {
               get.refresh(self)
@@ -1804,6 +1819,8 @@ export const swr: {
           }
         )
       }
+      subscribeRevalidate(options.revalidateOnFocus, options.focusSignal ?? windowFocusSignal)
+      subscribeRevalidate(options.revalidateOnReconnect, options.reconnectSignal ?? networkReconnectSignal)
       const firstRead = Option.isNone(get.self<AsyncResult.AsyncResult<A, E>>())
       if (firstRead && options.revalidateOnMount === false) {
         return current
@@ -1838,6 +1855,74 @@ const shouldRevalidateSWR = <A, E>(result: AsyncResult.AsyncResult<A, E>, staleT
   }
   return !isFreshWithin(timestamp, staleTime, Date.now())
 }
+
+const isPlainObject = (o: unknown): o is Record<PropertyKey, unknown> => {
+  if (typeof o !== "object" || o === null) return false
+  const proto = Object.getPrototypeOf(o)
+  return proto === Object.prototype || proto === null
+}
+
+/**
+ * Reuses references of unchanged array/object sub-trees from `prev` when building
+ * the structurally-equal parts of `next`.
+ *
+ * **Details**
+ *
+ * Walks `next` against `prev`; any array or plain-object sub-tree that is
+ * structurally unchanged keeps `prev`'s reference, so downstream consumers can
+ * skip it by identity. Leaves are compared with `Equal.equals`, so equal decoded
+ * instances (e.g. Schema classes) are shared too — deeper than a `===` check.
+ *
+ * @category combinators
+ * @since 4.0.0
+ */
+export const replaceEqualDeep = (prev: unknown, next: unknown): unknown => {
+  if (prev === next) return prev
+  const bothArrays = Array.isArray(prev) && Array.isArray(next)
+  if (bothArrays || (isPlainObject(prev) && isPlainObject(next))) {
+    const a = prev as Record<PropertyKey, any>
+    const b = next as Record<PropertyKey, any>
+    const copy: Record<PropertyKey, any> = bothArrays ? [] : {}
+    const nextKeys: Array<PropertyKey> = bothArrays ? (b as Array<any>).map((_, i) => i) : Object.keys(b)
+    const nextSize = nextKeys.length
+    const prevSize = bothArrays ? (a as Array<any>).length : Object.keys(a).length
+    let equalItems = 0
+    for (let i = 0; i < nextSize; i++) {
+      const key = nextKeys[i]
+      copy[key] = replaceEqualDeep(a[key], b[key])
+      if (copy[key] === a[key] && a[key] !== undefined) equalItems++
+    }
+    return prevSize === nextSize && equalItems === prevSize ? prev : copy
+  }
+  return Equal.equals(prev, next) ? prev : next
+}
+
+/**
+ * Shares each new `Success` value structurally against the previous one, so
+ * unchanged data keeps referential identity across refreshes.
+ *
+ * **Details**
+ *
+ * Applies {@link replaceEqualDeep} to consecutive successful values. The cost is a
+ * deep compare per emission (O(nodes)); skip it for very large or
+ * mostly-changing result sets, where the compare outweighs the saved re-renders.
+ *
+ * @category combinators
+ * @since 4.0.0
+ */
+export const structuralShare = <R extends Atom<AsyncResult.AsyncResult<any, any>>>(
+  self: R
+): WithoutSerializable<R> =>
+  transform(self, (get) => {
+    const next = get(self)
+    if (next._tag !== "Success") return next
+    const prev = Option.flatMap(get.self<AsyncResult.AsyncResult<any, any>>(), AsyncResult.value)
+    if (Option.isNone(prev)) return next
+    const shared = replaceEqualDeep(prev.value, next.value)
+    return shared === next.value
+      ? next
+      : AsyncResult.success(shared, { waiting: next.waiting, timestamp: next.timestamp })
+  }, { initialValueTarget: self }) as any
 
 /**
  * Wraps an atom in a writable optimistic atom.
@@ -2034,13 +2119,15 @@ export const batch: (f: () => void) => void = Registry.batch
  * **Details**
  *
  * It listens for `visibilitychange` events on `window` and removes the listener
- * when the atom is disposed.
+ * when the atom is disposed. Outside the browser (e.g. during server-side
+ * rendering) it stays at `0` and registers no listener.
  *
  * @category Focus
  * @since 4.0.0
  */
 export const windowFocusSignal: Atom<number> = readable((get) => {
   let count = 0
+  if (typeof window === "undefined") return count
   function update() {
     if (document.visibilityState === "visible") {
       get.setSelf(++count)
@@ -2049,6 +2136,36 @@ export const windowFocusSignal: Atom<number> = readable((get) => {
   window.addEventListener("visibilitychange", update)
   get.addFinalizer(() => {
     window.removeEventListener("visibilitychange", update)
+  })
+  return count
+})
+
+/**
+ * Creates a browser-only signal atom that increments when the browser regains
+ * network connectivity.
+ *
+ * **Details**
+ *
+ * It listens for `online` events on `window` and removes the listener when the
+ * atom is disposed. Pair it with {@link swr} (`revalidateOnReconnect`) or
+ * {@link makeRefreshOnSignal} to revalidate stale data after a reconnect.
+ * Outside the browser (e.g. during server-side rendering) it stays at `0` and
+ * registers no listener.
+ *
+ * @category Focus
+ * @since 4.0.0
+ */
+export const networkReconnectSignal: Atom<number> = readable((get) => {
+  let count = 0
+  if (typeof window === "undefined") return count
+  function update() {
+    if (navigator.onLine) {
+      get.setSelf(++count)
+    }
+  }
+  window.addEventListener("online", update)
+  get.addFinalizer(() => {
+    window.removeEventListener("online", update)
   })
   return count
 })
@@ -2087,6 +2204,37 @@ export const makeRefreshOnSignal = <_>(signal: Atom<_>) => <A extends Atom<any>>
 export const refreshOnWindowFocus: <A extends Atom<any>>(self: A) => WithoutSerializable<A> = makeRefreshOnSignal(
   windowFocusSignal
 )
+
+/**
+ * Refreshes an atom whenever `networkReconnectSignal` changes.
+ *
+ * **Details**
+ *
+ * This helper is browser-only because `networkReconnectSignal` depends on
+ * `window` and `navigator.onLine`.
+ *
+ * @category Focus
+ * @since 4.0.0
+ */
+export const refreshOnReconnect: <A extends Atom<any>>(self: A) => WithoutSerializable<A> = makeRefreshOnSignal(
+  networkReconnectSignal
+)
+
+/**
+ * Combines several numeric signal atoms into one that changes whenever any input
+ * changes.
+ *
+ * **Details**
+ *
+ * Useful for feeding multiple revalidation triggers — e.g. {@link windowFocusSignal}
+ * and {@link networkReconnectSignal} — into a single `focusSignal`. The derived
+ * value is the sum of the inputs, so a bump from any source changes it.
+ *
+ * @category Focus
+ * @since 4.0.0
+ */
+export const combineSignals = (...signals: ReadonlyArray<Atom<number>>): Atom<number> =>
+  make((get) => signals.reduce((sum, signal) => sum + get(signal), 0))
 
 // -----------------------------------------------------------------------------
 // KeyValueStore
